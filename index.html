@@ -1,0 +1,1908 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Punto de Venta Discoteca</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Prevenir errores en módulos ES del navegador -->
+    <script>window.process = { env: { NODE_ENV: 'production' } };</script>
+    
+    <!-- Babel Standalone para compilar JSX en el navegador -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(243, 244, 246, 1); 
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(209, 213, 219, 1); 
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: rgba(156, 163, 175, 1); 
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans selection:bg-indigo-100 selection:text-indigo-900">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'https://esm.sh/react@18.2.0';
+        import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+        import { 
+          ShoppingCart, Package, ClipboardList, Wallet, 
+          CreditCard, Banknote, Smartphone, Plus, Minus, 
+          Trash2, Search, ArrowUpCircle, ArrowDownCircle,
+          History, Wine, Beer, CupSoda, Cigarette, Edit2, 
+          Image as ImageIcon, Tags, Lock, Unlock, FileText,
+          AlertCircle, Utensils, Pizza, Martini,
+          Users, LogOut, UserCircle, Key, CheckSquare, Square,
+          Cloud, CloudOff
+        } from 'https://esm.sh/lucide-react@0.292.0';
+
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        // --- Configuración Global de Firebase ---
+        let app, auth, db, appId;
+        try {
+          const firebaseConfig = {
+            apiKey: "AIzaSyBIW9X4iolnzyD39G4rNhe7YU_CNIUjVDE",
+            authDomain: "sandubai-64fa2.firebaseapp.com",
+            projectId: "sandubai-64fa2",
+            storageBucket: "sandubai-64fa2.firebasestorage.app",
+            messagingSenderId: "1024958244985",
+            appId: "1:1024958244985:web:34f353e0208c56655f0ca8"
+          };
+          app = initializeApp(firebaseConfig);
+          auth = getAuth(app);
+          db = getFirestore(app);
+          appId = 'sandubai-pos'; // Identificador para las colecciones en tu base de datos
+        } catch (e) {
+          console.error("Error inicializando Firebase:", e);
+        }
+
+        // --- Datos Iniciales ---
+        const INITIAL_PRODUCTS = [
+          { id: 1, name: 'Cerveza Pilsen 630ml', category: 'Cervezas', price: 10.00, stock: 120, image: 'https://picsum.photos/seed/beer1/200/300' },
+          { id: 2, name: 'Cusqueña Trigo 620ml', category: 'Cervezas', price: 12.00, stock: 80, image: 'https://picsum.photos/seed/beer2/200/300' },
+          { id: 3, name: 'Corona Extra 355ml', category: 'Cervezas', price: 15.00, stock: 60, image: 'https://picsum.photos/seed/beer3/200/300' },
+          { id: 4, name: 'Agua San Mateo 600ml', category: 'Aguas', price: 5.00, stock: 50, image: 'https://picsum.photos/seed/water1/200/300' },
+          { id: 5, name: 'Agua Cielo 625ml', category: 'Aguas', price: 4.00, stock: 45, image: 'https://picsum.photos/seed/water2/200/300' },
+          { id: 6, name: 'Coca Cola 500ml', category: 'Gaseosas', price: 6.00, stock: 70, image: 'https://picsum.photos/seed/soda1/200/300' },
+          { id: 7, name: 'Inca Kola 500ml', category: 'Gaseosas', price: 6.00, stock: 70, image: 'https://picsum.photos/seed/soda2/200/300' },
+          { id: 8, name: 'Guaraná 500ml', category: 'Gaseosas', price: 5.00, stock: 40, image: 'https://picsum.photos/seed/soda3/200/300' },
+          { id: 9, name: 'Lucky Strike (Cajetilla)', category: 'Cigarros', price: 20.00, stock: 30, image: 'https://picsum.photos/seed/cigar1/200/300' },
+          { id: 10, name: 'Hamilton (Cajetilla)', category: 'Cigarros', price: 18.00, stock: 25, image: 'https://picsum.photos/seed/cigar2/200/300' },
+          { id: 11, name: 'Tequeños con Guacamole (10 und)', category: 'Piqueos', price: 18.00, stock: 40, image: 'https://picsum.photos/seed/tequenos/200/300' },
+          { id: 12, name: 'Alitas BBQ (8 und)', category: 'Piqueos', price: 22.00, stock: 30, image: 'https://picsum.photos/seed/alitas/200/300' },
+          { id: 13, name: 'Salchipapa Clásica', category: 'Comidas', price: 15.00, stock: 50, image: 'https://picsum.photos/seed/salchipapa/200/300' },
+          { id: 14, name: 'Hamburguesa Royal', category: 'Comidas', price: 18.00, stock: 25, image: 'https://picsum.photos/seed/burger/200/300' },
+          { id: 15, name: 'Chilcano de Pisco', category: 'Tragos Cortos', price: 20.00, stock: 40, image: 'https://picsum.photos/seed/chilcano/200/300' },
+          { id: 16, name: 'Cuba Libre', category: 'Tragos Cortos', price: 18.00, stock: 45, image: 'https://picsum.photos/seed/cubalibre/200/300' },
+        ];
+
+        const INITIAL_CATEGORIES = ['Cervezas', 'Aguas', 'Gaseosas', 'Cigarros', 'Piqueos', 'Comidas', 'Tragos Cortos'];
+
+        const SECTION_OPTIONS = [
+          { id: 'pos', name: 'Punto de Venta (Caja)' },
+          { id: 'inventory', name: 'Inventario (Solo ingreso)' },
+          { id: 'kardex', name: 'Kardex de Movimientos' },
+          { id: 'sales', name: 'Reportes y Ventas' }
+        ];
+
+        const INITIAL_USERS = [
+          { id: 1, name: 'Administrador General', username: 'admin', password: '123', role: 'admin', allowedSections: [], allowedCategories: [] },
+          { id: 2, name: 'Cajero Barras', username: 'barras', password: '123', role: 'personal', allowedSections: ['pos'], allowedCategories: ['Cervezas', 'Aguas', 'Gaseosas', 'Cigarros', 'Tragos Cortos'] },
+          { id: 3, name: 'Almacenero', username: 'almacen', password: '123', role: 'personal', allowedSections: ['inventory'], allowedCategories: [] }
+        ];
+
+        const DEFAULT_USER_FORM = { id: null, name: '', username: '', password: '', role: 'personal', allowedSections: ['pos'], allowedCategories: [] };
+
+        const PAYMENT_METHODS = [
+          { id: 'efectivo', name: 'Efectivo', icon: Banknote, color: 'bg-emerald-600' },
+          { id: 'tarjeta', name: 'Tarjeta (POS)', icon: CreditCard, color: 'bg-blue-600' },
+          { id: 'yape', name: 'Yape', icon: Smartphone, color: 'bg-purple-600' },
+          { id: 'plin', name: 'Plin', icon: Smartphone, color: 'bg-cyan-600' },
+        ];
+
+        const DEFAULT_PRODUCT_FORM = { id: null, name: '', category: 'Cervezas', price: '', stock: '', image: '' };
+
+        function DiscotecaPOS() {
+          // --- Estados de Conexión (Firebase) ---
+          const [sysAuthUser, setSysAuthUser] = useState(null);
+          const [isSyncing, setIsSyncing] = useState(true);
+
+          // --- Estado Global para Alertas Customizadas ---
+          const [dialog, setDialog] = useState(null); // { type: 'alert'|'confirm', message: string, onConfirm?: () => void }
+
+          // --- Estados Principales Sincronizados ---
+          const [activeTab, setActiveTab] = useState('pos');
+          const [salesTab, setSalesTab] = useState('actual');
+          const [products, setProducts] = useState([]);
+          const [categories, setCategories] = useState([]);
+          const [kardex, setKardex] = useState([]);
+          const [sales, setSales] = useState([]);
+          const [users, setUsers] = useState([]);
+          const [boxReports, setBoxReports] = useState([]);
+
+          // --- Estados de Sesión Local ---
+          const [currentUser, setCurrentUser] = useState(null); 
+          const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+          const [cart, setCart] = useState([]);
+          const [boxSession, setBoxSession] = useState(null); 
+          const [initialCashForm, setInitialCashForm] = useState('');
+          const [declaredCashForm, setDeclaredCashForm] = useState(''); 
+
+          // --- Estados de UI ---
+          const [selectedCategory, setSelectedCategory] = useState('Todos');
+          const [searchQuery, setSearchQuery] = useState('');
+          
+          // Modales
+          const [showPaymentModal, setShowPaymentModal] = useState(false);
+          const [showStockModal, setShowStockModal] = useState(false);
+          const [showProductModal, setShowProductModal] = useState(false);
+          const [showCategoryModal, setShowCategoryModal] = useState(false);
+          const [showCloseBoxModal, setShowCloseBoxModal] = useState(false);
+          const [showUserModal, setShowUserModal] = useState(false);
+          
+          // Formularios
+          const [stockForm, setStockForm] = useState({ productId: '', quantity: 1, reason: 'Compra a proveedor' });
+          const [productForm, setProductForm] = useState(DEFAULT_PRODUCT_FORM);
+          const [newCategoryName, setNewCategoryName] = useState('');
+          const [userForm, setUserForm] = useState(DEFAULT_USER_FORM);
+
+          // --- Utilidades Firebase ---
+          const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
+          const getDocRef = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
+
+          // --- 1. Inicialización de Firebase Auth ---
+          useEffect(() => {
+            const initAuth = async () => {
+              try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                  await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                  await signInAnonymously(auth);
+                }
+              } catch (error) {
+                console.error("Error autenticando con Firebase", error);
+              }
+            };
+            if(auth) initAuth();
+            
+            if(auth) {
+              const unsubscribe = onAuthStateChanged(auth, (u) => {
+                setSysAuthUser(u);
+              });
+              return () => unsubscribe();
+            }
+          }, []);
+
+          // --- 2. Sincronización en Tiempo Real (Listeners) ---
+          useEffect(() => {
+            if (!sysAuthUser) return;
+
+            setIsSyncing(true);
+
+            const unsubUsers = onSnapshot(getColRef('pos_users'), (snap) => {
+              if (snap.empty) {
+                // Sembrar datos iniciales si la DB está virgen
+                INITIAL_USERS.forEach(u => setDoc(getDocRef('pos_users', u.id.toString()), u));
+                INITIAL_PRODUCTS.forEach(p => setDoc(getDocRef('pos_products', p.id.toString()), p));
+                setDoc(getDocRef('pos_settings', 'categories'), { list: INITIAL_CATEGORIES });
+              } else {
+                const items = snap.docs.map(d => d.data()).sort((a,b) => a.id - b.id);
+                setUsers(items);
+              }
+            }, console.error);
+
+            const unsubProducts = onSnapshot(getColRef('pos_products'), (snap) => {
+              const items = snap.docs.map(d => d.data()).sort((a,b) => a.id - b.id);
+              setProducts(items);
+              setIsSyncing(false);
+            }, console.error);
+
+            const unsubSettings = onSnapshot(getDocRef('pos_settings', 'categories'), (snap) => {
+              if (snap.exists()) setCategories(snap.data().list || []);
+            }, console.error);
+
+            const unsubKardex = onSnapshot(getColRef('pos_kardex'), (snap) => {
+              const items = snap.docs.map(d => ({...d.data(), date: new Date(d.data().date) })).sort((a,b) => b.date - a.date);
+              setKardex(items);
+            }, console.error);
+
+            const unsubSales = onSnapshot(getColRef('pos_sales'), (snap) => {
+              const items = snap.docs.map(d => ({...d.data(), date: new Date(d.data().date) })).sort((a,b) => b.date - a.date);
+              setSales(items);
+            }, console.error);
+
+            const unsubReports = onSnapshot(getColRef('pos_reports'), (snap) => {
+              const items = snap.docs.map(d => ({
+                ...d.data(), 
+                startTime: new Date(d.data().startTime),
+                endTime: new Date(d.data().endTime)
+              })).sort((a,b) => b.endTime - a.endTime);
+              setBoxReports(items);
+            }, console.error);
+
+            return () => {
+              unsubUsers(); unsubProducts(); unsubSettings(); unsubKardex(); unsubSales(); unsubReports();
+            };
+          }, [sysAuthUser]);
+
+
+          // --- Funciones de Caja ---
+          const handleOpenBox = (e) => {
+            e.preventDefault();
+            const initialCash = parseFloat(initialCashForm) || 0;
+            setBoxSession({
+              id: Math.random().toString(36).substr(2, 9),
+              startTime: new Date(),
+              initialCash: initialCash,
+              salesEfectivo: 0,
+              salesTarjeta: 0,
+              salesYape: 0,
+              salesPlin: 0,
+              totalSalesCount: 0,
+              openedBy: currentUser.username
+            });
+            setInitialCashForm('');
+          };
+
+          const handleCloseBox = async (e) => {
+            e.preventDefault();
+            if (!boxSession) return;
+            
+            const declaredCash = parseFloat(declaredCashForm) || 0;
+            const efectivoEsperado = boxSession.initialCash + boxSession.salesEfectivo;
+
+            const report = {
+              ...boxSession,
+              endTime: new Date(),
+              totalVentas: boxSession.salesEfectivo + boxSession.salesTarjeta + boxSession.salesYape + boxSession.salesPlin,
+              efectivoEsperado: efectivoEsperado,
+              efectivoDeclarado: declaredCash,
+              descuadre: declaredCash - efectivoEsperado,
+              closedBy: currentUser.username
+            };
+            
+            // Guardar en la nube (Firestore)
+            const reportId = Math.random().toString(36).substr(2, 9);
+            await setDoc(getDocRef('pos_reports', reportId), {
+              ...report,
+              id: reportId,
+              startTime: report.startTime.toISOString(),
+              endTime: report.endTime.toISOString()
+            });
+
+            setBoxSession(null);
+            setShowCloseBoxModal(false);
+            setDeclaredCashForm('');
+            
+            if (currentUser.role === 'admin') {
+              setSalesTab('historial');
+              setActiveTab('sales');
+            }
+          };
+
+          // --- Funciones del Carrito y Ventas ---
+          const addToCart = (product) => {
+            const existingItem = cart.find(item => item.id === product.id);
+            const currentQtyInCart = existingItem ? existingItem.quantity : 0;
+
+            if (currentQtyInCart >= product.stock) {
+              setDialog({ type: 'alert', message: '¡No hay suficiente stock! (Sincronizado con otras cajas)' });
+              return;
+            }
+
+            if (existingItem) {
+              setCart(cart.map(item => 
+                item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+              ));
+            } else {
+              setCart([...cart, { ...product, quantity: 1 }]);
+            }
+          };
+
+          const updateCartQuantity = (id, delta) => {
+            const product = products.find(p => p.id === id);
+            setCart(cart.map(item => {
+              if (item.id === id) {
+                const newQty = item.quantity + delta;
+                if (newQty > product.stock) {
+                  setDialog({ type: 'alert', message: '¡Stock máximo alcanzado en este momento!' });
+                  return item;
+                }
+                return { ...item, quantity: Math.max(1, newQty) };
+              }
+              return item;
+            }));
+          };
+
+          const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
+
+          const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+          const handleCheckout = async (paymentMethodId) => {
+            if (cart.length === 0 || !boxSession) return;
+
+            const saleId = Math.random().toString(36).substr(2, 9);
+            const now = new Date();
+
+            // 1. Validar y Actualizar Stock en la Nube
+            for (const item of cart) {
+              const dbProduct = products.find(p => p.id === item.id);
+              if (dbProduct.stock < item.quantity) {
+                 setDialog({ type: 'alert', message: `No hay stock suficiente de ${dbProduct.name}. Alguien más pudo haberlo vendido. Revisa el stock y reintenta.` });
+                 return;
+              }
+            }
+
+            // Si hay stock, procesar venta...
+            for (const item of cart) {
+              const dbProduct = products.find(p => p.id === item.id);
+              const newStock = dbProduct.stock - item.quantity;
+              
+              await setDoc(getDocRef('pos_products', dbProduct.id.toString()), { ...dbProduct, stock: newStock });
+              
+              const kId = Math.random().toString(36).substr(2, 9);
+              await setDoc(getDocRef('pos_kardex', kId), {
+                id: kId,
+                date: now.toISOString(),
+                type: 'OUT',
+                productId: dbProduct.id,
+                productName: dbProduct.name,
+                quantity: item.quantity,
+                previousStock: dbProduct.stock,
+                newStock: newStock,
+                reason: `Venta #${saleId.toUpperCase()} (${currentUser.username})`
+              });
+            }
+
+            // 2. Guardar Venta
+            const newSale = {
+              id: saleId,
+              sessionId: boxSession.id,
+              date: now.toISOString(),
+              items: [...cart],
+              total: cartTotal,
+              paymentMethod: paymentMethodId,
+              soldBy: currentUser.username
+            };
+            await setDoc(getDocRef('pos_sales', saleId), newSale);
+
+            // 3. Actualizar Sesión de Caja Local
+            setBoxSession(prev => ({
+              ...prev,
+              salesEfectivo: prev.salesEfectivo + (paymentMethodId === 'efectivo' ? cartTotal : 0),
+              salesTarjeta: prev.salesTarjeta + (paymentMethodId === 'tarjeta' ? cartTotal : 0),
+              salesYape: prev.salesYape + (paymentMethodId === 'yape' ? cartTotal : 0),
+              salesPlin: prev.salesPlin + (paymentMethodId === 'plin' ? cartTotal : 0),
+              totalSalesCount: prev.totalSalesCount + 1
+            }));
+
+            setCart([]);
+            setShowPaymentModal(false);
+          };
+
+          // --- Funciones de Categorías (Sincronizadas) ---
+          const handleAddCategory = async (e) => {
+            e.preventDefault();
+            if (newCategoryName.trim() && !categories.includes(newCategoryName.trim())) {
+              const newCatList = [...categories, newCategoryName.trim()];
+              await setDoc(getDocRef('pos_settings', 'categories'), { list: newCatList });
+              setNewCategoryName('');
+            }
+          };
+
+          const handleDeleteCategory = async (cat) => {
+            const isUsed = products.some(p => p.category === cat);
+            if (isUsed) {
+              setDialog({ type: 'alert', message: `No puedes eliminar la categoría "${cat}" porque hay productos que la están usando.` });
+              return;
+            }
+            setDialog({ type: 'confirm', message: `¿Eliminar la categoría "${cat}" de forma permanente?`, onConfirm: async () => {
+              const newCatList = categories.filter(c => c !== cat);
+              await setDoc(getDocRef('pos_settings', 'categories'), { list: newCatList });
+              if (selectedCategory === cat) setSelectedCategory('Todos');
+            }});
+          };
+
+          // --- Funciones de Autenticación Local ---
+          const handleLogin = (e) => {
+            e.preventDefault();
+            const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
+            if (user) {
+              setCurrentUser(user);
+              setActiveTab(user.role === 'admin' || user.allowedSections?.includes('pos') ? 'pos' : user.allowedSections[0]);
+              setSalesTab('actual');
+              setLoginForm({ username: '', password: '' });
+            } else {
+              setDialog({ type: 'alert', message: 'Usuario o contraseña incorrectos. Verifica tus datos.' });
+            }
+          };
+
+          const handleLogout = () => {
+            if (boxSession) {
+              setDialog({ type: 'confirm', message: 'Tu caja local está abierta. ¿Deseas cerrar sesión? (El turno seguirá pausado en este dispositivo hasta que vuelvas o lo cierres)', onConfirm: () => setCurrentUser(null) });
+              return;
+            }
+            setCurrentUser(null);
+          };
+
+          // --- Funciones de Usuarios (CRUD Sincronizado) ---
+          const handleOpenUserModal = (user = null) => {
+            setUserForm(user ? user : DEFAULT_USER_FORM);
+            setShowUserModal(true);
+          };
+
+          const handleSaveUser = async (e) => {
+            e.preventDefault();
+            const newId = userForm.id || (users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1);
+            await setDoc(getDocRef('pos_users', newId.toString()), { ...userForm, id: newId });
+            setShowUserModal(false);
+          };
+
+          const handleDeleteUser = async (id) => {
+            if (id === currentUser.id) {
+              setDialog({ type: 'alert', message: 'No puedes eliminar tu propio usuario.' });
+              return;
+            }
+            setDialog({ type: 'confirm', message: '¿Eliminar este usuario del sistema permanentemente?', onConfirm: async () => {
+              await deleteDoc(getDocRef('pos_users', id.toString()));
+            }});
+          };
+
+          // --- Funciones de Productos (CRUD Sincronizado) ---
+          const handleOpenProductModal = (product = null) => {
+            setProductForm(product ? product : { ...DEFAULT_PRODUCT_FORM, category: categories[0] || '' });
+            setShowProductModal(true);
+          };
+
+          const handleSaveProduct = async (e) => {
+            e.preventDefault();
+            
+            const newId = productForm.id || (products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1);
+            const productData = {
+              ...productForm,
+              id: newId,
+              price: parseFloat(productForm.price),
+              stock: parseInt(productForm.stock) || 0,
+              image: productForm.image || `https://picsum.photos/seed/${productForm.name.replace(/\s/g, '')}/200/300`
+            };
+
+            await setDoc(getDocRef('pos_products', newId.toString()), productData);
+            
+            // Si es un producto nuevo con stock inicial, registramos en Kardex
+            if (!productForm.id && productData.stock > 0) {
+              const kId = Math.random().toString(36).substr(2, 9);
+              await setDoc(getDocRef('pos_kardex', kId), {
+                id: kId, date: new Date().toISOString(), type: 'IN',
+                productId: newId, productName: productData.name, quantity: productData.stock,
+                previousStock: 0, newStock: productData.stock, reason: 'Ingreso Inicial'
+              });
+            }
+            setShowProductModal(false);
+          };
+
+          const handleDeleteProduct = async (id) => {
+            setDialog({ type: 'confirm', message: '¿Eliminar este producto permanentemente de todas las pantallas?', onConfirm: async () => {
+              await deleteDoc(getDocRef('pos_products', id.toString()));
+              setCart(cart.filter(item => item.id !== id));
+            }});
+          };
+
+          // --- Ingreso de Mercadería (Stock Sincronizado) ---
+          const handleAddStock = async (e) => {
+            e.preventDefault();
+            const productId = parseInt(stockForm.productId);
+            const qty = parseInt(stockForm.quantity);
+            if (!productId || qty <= 0) return;
+
+            const product = products.find(p => p.id === productId);
+            const newStock = product.stock + qty;
+
+            await setDoc(getDocRef('pos_products', productId.toString()), { ...product, stock: newStock });
+
+            const kId = Math.random().toString(36).substr(2, 9);
+            await setDoc(getDocRef('pos_kardex', kId), {
+              id: kId, date: new Date().toISOString(), type: 'IN',
+              productId: product.id, productName: product.name, quantity: qty,
+              previousStock: product.stock, newStock: newStock, reason: `${stockForm.reason} (${currentUser.username})`
+            });
+            
+            setShowStockModal(false);
+            setStockForm({ productId: '', quantity: 1, reason: 'Compra a proveedor' });
+          };
+
+          // --- Utilidades de Formato ---
+          const formatCurrency = (amount) => `S/ ${amount.toFixed(2)}`;
+          const formatDate = (date) => new Intl.DateTimeFormat('es-PE', { 
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' 
+          }).format(date);
+          const formatTime = (date) => new Intl.DateTimeFormat('es-PE', { 
+            hour: '2-digit', minute: '2-digit' 
+          }).format(date);
+
+          // --- Filtrado de Productos y Permisos (Caja) ---
+          const isAllowedProduct = (product) => {
+            if (currentUser?.role === 'admin') return true;
+            return currentUser?.allowedCategories?.includes(product.category);
+          };
+
+          const filteredProducts = products.filter(p => {
+            if (!isAllowedProduct(p)) return false; 
+            const matchCategory = selectedCategory === 'Todos' || p.category === selectedCategory;
+            const matchSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
+            return matchCategory && matchSearch;
+          });
+
+          const getCategoryIcon = (category) => {
+            switch(category.toLowerCase()) {
+              case 'cervezas': return <Beer size={18} />;
+              case 'aguas': return <Wine size={18} />;
+              case 'gaseosas': return <CupSoda size={18} />;
+              case 'cigarros': return <Cigarette size={18} />;
+              case 'piqueos': return <Pizza size={18} />;
+              case 'comidas': return <Utensils size={18} />;
+              case 'tragos cortos': return <Martini size={18} />;
+              default: return <Package size={18} />;
+            }
+          };
+
+          // Categorías autorizadas para el usuario actual
+          const userCategories = currentUser?.role === 'admin' 
+            ? categories 
+            : categories.filter(cat => currentUser?.allowedCategories?.includes(cat));
+
+          // ================= RENDERIZADO DE VISTAS =================
+
+          const renderOpenBoxScreen = () => (
+            <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 h-full p-6">
+              <div className="bg-white p-8 rounded-3xl shadow-xl border border-gray-200 w-full max-w-md text-center relative overflow-hidden">
+                {isSyncing && (
+                  <div className="absolute top-0 left-0 w-full bg-blue-500 text-white text-xs py-1 font-bold animate-pulse">Sincronizando con la nube...</div>
+                )}
+                <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6 mt-4">
+                  <Lock size={40} className="text-indigo-600" />
+                </div>
+                <h2 className="text-2xl font-black text-gray-900 mb-2">Caja Cerrada</h2>
+                <p className="text-gray-500 mb-8 font-medium">Apertura la caja ingresando el fondo inicial para comenzar a realizar ventas.</p>
+                
+                <form onSubmit={handleOpenBox} className="space-y-6">
+                  <div className="text-left">
+                    <label className="block text-sm font-bold text-gray-700 mb-2">Monto Inicial en Efectivo (S/)</label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">S/</span>
+                      <input 
+                        type="number" 
+                        step="0.10"
+                        min="0"
+                        required
+                        autoFocus
+                        className="w-full bg-gray-50 border border-gray-300 rounded-xl py-3 pl-10 pr-4 text-gray-900 font-bold text-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                        value={initialCashForm}
+                        onChange={(e) => setInitialCashForm(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                  
+                  <button 
+                    type="submit"
+                    className="w-full py-4 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 text-lg"
+                  >
+                    <Unlock size={22} /> Iniciar Turno de Caja
+                  </button>
+                </form>
+              </div>
+            </div>
+          );
+
+          const renderPOS = () => {
+            if (!boxSession) return renderOpenBoxScreen();
+
+            return (
+              <div className="flex h-full w-full bg-gray-50 overflow-hidden">
+                {/* Catálogo de Productos */}
+                <div className="flex-1 flex flex-col p-4 overflow-hidden">
+                  {/* Top Bar POS */}
+                  <div className="flex gap-4 mb-4">
+                    <div className="flex-1 relative shadow-sm">
+                      <Search className="absolute left-3 top-3 text-gray-400" size={20} />
+                      <input 
+                        type="text" 
+                        placeholder="Buscar producto..." 
+                        className="w-full bg-white text-gray-800 rounded-xl pl-10 pr-4 py-2 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all font-medium"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                      />
+                    </div>
+                    {isSyncing ? (
+                      <div className="bg-blue-50 text-blue-600 border border-blue-200 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm animate-pulse text-sm">
+                        <Cloud size={18}/> Conectando...
+                      </div>
+                    ) : (
+                      <div className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm text-sm" title="Stock sincronizado en vivo">
+                        <Cloud size={18}/> En línea
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Categorías */}
+                  <div className="flex gap-2 mb-4 overflow-x-auto pb-2 custom-scrollbar">
+                    {['Todos', ...userCategories].map(cat => (
+                      <button
+                        key={cat}
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`px-4 py-2 rounded-full whitespace-nowrap font-medium flex items-center gap-2 transition-all shadow-sm ${
+                          selectedCategory === cat 
+                            ? 'bg-indigo-600 text-white shadow-indigo-600/30' 
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100 hover:text-gray-900'
+                        }`}
+                      >
+                        {cat !== 'Todos' && getCategoryIcon(cat)}
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Grilla de Productos */}
+                  <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-20">
+                      {filteredProducts.map(product => (
+                        <div 
+                          key={product.id}
+                          onClick={() => product.stock > 0 && addToCart(product)}
+                          className={`relative bg-white rounded-xl p-3 border-2 transition-all cursor-pointer select-none flex flex-col justify-start h-full shadow-sm hover:shadow-md ${
+                            product.stock > 0 
+                              ? 'border-transparent hover:border-indigo-500 active:scale-95' 
+                              : 'border-red-100 opacity-60 cursor-not-allowed grayscale-[50%]'
+                          }`}
+                        >
+                          {/* Imagen del Producto */}
+                          <div className="aspect-[3/4] w-full bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center mb-3 relative">
+                            {product.image ? (
+                              <img src={product.image} alt={product.name} className="object-cover object-center w-full h-full hover:scale-105 transition-transform duration-300" />
+                            ) : (
+                              <ImageIcon size={32} className="text-gray-300" />
+                            )}
+                          </div>
+                          
+                          <div className="flex-1 flex flex-col justify-between">
+                            <div className="mb-2">
+                              <div className="text-[10px] text-indigo-600 font-bold uppercase tracking-wider mb-0.5">{product.category}</div>
+                              <h3 className="text-gray-800 font-bold text-sm leading-tight line-clamp-2">{product.name}</h3>
+                            </div>
+                            <div className="flex justify-between items-end mt-auto pt-2">
+                              <span className="text-lg font-black text-emerald-600">{formatCurrency(product.price)}</span>
+                              <span className={`text-xs px-2 py-1 rounded-md font-bold transition-colors duration-500 ${
+                                product.stock > 10 ? 'bg-gray-100 text-gray-600' : 'bg-red-100 text-red-600 animate-pulse'
+                              }`}>
+                                Stock: {product.stock}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {filteredProducts.length === 0 && (
+                        <div className="col-span-full flex flex-col items-center justify-center text-gray-400 h-64">
+                           <Package size={48} className="mb-4 opacity-50" />
+                           <p className="font-medium text-lg">No hay productos disponibles para mostrar.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Carrito Lateral */}
+                <div className="w-96 bg-white border-l border-gray-200 flex flex-col shadow-2xl z-10">
+                  <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white/90 backdrop-blur-md">
+                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                      <ShoppingCart className="text-indigo-600" /> Pedido Actual
+                    </h2>
+                    <span className="bg-indigo-600 text-white px-3 py-1 rounded-full text-sm font-bold shadow-sm">
+                      {cart.reduce((sum, item) => sum + item.quantity, 0)} items
+                    </span>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-gray-50/50">
+                    {cart.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                        <ShoppingCart size={48} className="mb-4 text-gray-300" />
+                        <p className="font-medium">El carrito está vacío</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {cart.map(item => (
+                          <div key={item.id} className="bg-white rounded-xl p-3 flex flex-col gap-2 border border-gray-200 shadow-sm">
+                            <div className="flex justify-between items-start gap-2">
+                              <span className="font-semibold text-gray-800 text-sm leading-tight flex-1">{item.name}</span>
+                              <button onClick={() => removeFromCart(item.id)} className="text-red-500 hover:text-red-700 bg-red-50 p-1.5 rounded-lg transition-colors">
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                            <div className="flex justify-between items-center mt-1">
+                              <span className="text-emerald-600 font-black">{formatCurrency(item.price)}</span>
+                              <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1 border border-gray-200">
+                                <button 
+                                  onClick={() => updateCartQuantity(item.id, -1)}
+                                  className="bg-white hover:bg-gray-50 border border-gray-200 rounded p-1 text-gray-600 transition-colors shadow-sm"
+                                >
+                                  <Minus size={14} />
+                                </button>
+                                <span className="text-gray-800 font-bold w-6 text-center text-sm">{item.quantity}</span>
+                                <button 
+                                  onClick={() => updateCartQuantity(item.id, 1)}
+                                  className="bg-white hover:bg-gray-50 border border-gray-200 rounded p-1 text-gray-600 transition-colors shadow-sm"
+                                >
+                                  <Plus size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-5 bg-white border-t border-gray-200">
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-gray-500 font-medium">Total a Pagar</span>
+                      <span className="text-3xl font-black text-gray-900">{formatCurrency(cartTotal)}</span>
+                    </div>
+                    <button 
+                      onClick={() => setShowPaymentModal(true)}
+                      disabled={cart.length === 0}
+                      className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
+                        cart.length > 0 
+                          ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/30' 
+                          : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      }`}
+                    >
+                      <Wallet size={24} /> Cobrar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          };
+
+          const renderInventory = () => (
+            <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
+                  <Package className="text-indigo-600" /> Inventario y Productos
+                </h2>
+                <div className="flex gap-3">
+                  {currentUser?.role === 'admin' && (
+                    <>
+                      <button 
+                        onClick={() => setShowCategoryModal(true)}
+                        className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
+                      >
+                        <Tags size={18} /> Categorías
+                      </button>
+                      <button 
+                        onClick={() => handleOpenProductModal()}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20"
+                      >
+                        <Plus size={18} /> Nuevo Producto
+                      </button>
+                    </>
+                  )}
+                  <button 
+                    onClick={() => setShowStockModal(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-emerald-600/20"
+                  >
+                    <ArrowUpCircle size={18} /> Ingresar Stock
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
+                <div className="overflow-x-auto flex-1 custom-scrollbar">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0 z-10">
+                      <tr>
+                        <th className="px-6 py-4">Img</th>
+                        <th className="px-6 py-4">Producto</th>
+                        <th className="px-6 py-4">Categoría</th>
+                        <th className="px-6 py-4">Precio</th>
+                        <th className="px-6 py-4 text-center">Stock Actual</th>
+                        <th className="px-6 py-4 text-center">Estado</th>
+                        {currentUser?.role === 'admin' && <th className="px-6 py-4 text-right">Acciones</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {products.map(p => (
+                        <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
+                          <td className="px-6 py-3">
+                             <div className="w-10 h-14 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex items-center justify-center">
+                                {p.image ? <img src={p.image} alt={p.name} className="w-full h-full object-cover" /> : <ImageIcon size={16} className="text-gray-400"/>}
+                             </div>
+                          </td>
+                          <td className="px-6 py-4 font-bold text-gray-800">{p.name}</td>
+                          <td className="px-6 py-4">
+                            <span className="bg-gray-100 text-gray-600 border border-gray-200 px-3 py-1 rounded-full text-xs font-semibold">{p.category}</span>
+                          </td>
+                          <td className="px-6 py-4 font-bold text-emerald-600">{formatCurrency(p.price)}</td>
+                          <td className="px-6 py-4 text-center font-black text-lg text-gray-700 transition-colors">{p.stock}</td>
+                          <td className="px-6 py-4 text-center">
+                            {p.stock > 20 ? (
+                              <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full text-xs font-bold">Óptimo</span>
+                            ) : p.stock > 0 ? (
+                              <span className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full text-xs font-bold">Bajo</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 bg-red-100 text-red-700 px-2.5 py-1 rounded-full text-xs font-bold">Agotado</span>
+                            )}
+                          </td>
+                          {currentUser?.role === 'admin' && (
+                            <td className="px-6 py-4 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <button 
+                                  onClick={() => handleOpenProductModal(p)}
+                                  className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                  title="Editar"
+                                >
+                                  <Edit2 size={18} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteProduct(p.id)}
+                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Eliminar"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                      {products.length === 0 && (
+                        <tr><td colSpan={currentUser?.role === 'admin' ? 7 : 6} className="text-center py-12 text-gray-500">No hay productos registrados en el inventario.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+
+          const renderKardex = () => (
+            <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
+              <h2 className="text-2xl font-bold flex items-center gap-2 mb-6 text-gray-900">
+                <ClipboardList className="text-indigo-600" /> Historial de Kardex (Nube)
+              </h2>
+              
+              <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
+                <div className="overflow-x-auto flex-1 custom-scrollbar">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0">
+                      <tr>
+                        <th className="px-6 py-4">Fecha y Hora</th>
+                        <th className="px-6 py-4">Movimiento</th>
+                        <th className="px-6 py-4">Producto</th>
+                        <th className="px-6 py-4 text-right">Cant.</th>
+                        <th className="px-6 py-4 text-right">Saldo</th>
+                        <th className="px-6 py-4">Motivo / Autor</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {kardex.map(k => (
+                        <tr key={k.id} className="hover:bg-gray-50/80 transition-colors">
+                          <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(k.date)}</td>
+                          <td className="px-6 py-4">
+                            {k.type === 'IN' ? (
+                              <span className="flex items-center gap-1 text-emerald-700 text-xs font-bold px-2.5 py-1 bg-emerald-100 rounded-full w-fit">
+                                <ArrowUpCircle size={14} /> ENTRADA
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-rose-700 text-xs font-bold px-2.5 py-1 bg-rose-100 rounded-full w-fit">
+                                <ArrowDownCircle size={14} /> SALIDA
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 font-bold text-gray-800">{k.productName}</td>
+                          <td className={`px-6 py-4 text-right font-black ${k.type === 'IN' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {k.type === 'IN' ? '+' : '-'}{k.quantity}
+                          </td>
+                          <td className="px-6 py-4 text-right font-black text-gray-700">{k.newStock}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">{k.reason}</td>
+                        </tr>
+                      ))}
+                      {kardex.length === 0 && (
+                        <tr><td colSpan="6" className="text-center py-12 text-gray-500">No hay movimientos registrados en la nube.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+
+          const renderSales = () => {
+            const currentSessionSales = boxSession ? sales.filter(s => s.sessionId === boxSession.id) : [];
+
+            return (
+              <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
+                    <History className="text-indigo-600" /> Registro y Reportes de Ventas
+                  </h2>
+                  
+                  <div className="flex bg-white rounded-xl border border-gray-200 p-1 shadow-sm">
+                    <button 
+                      onClick={() => setSalesTab('actual')}
+                      className={`px-6 py-2 rounded-lg font-bold text-sm transition-all ${salesTab === 'actual' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-900'}`}
+                    >
+                      Turno Actual
+                    </button>
+                    <button 
+                      onClick={() => setSalesTab('historial')}
+                      className={`px-6 py-2 rounded-lg font-bold text-sm transition-all ${salesTab === 'historial' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-900'}`}
+                    >
+                      Historial (Consolidado)
+                    </button>
+                  </div>
+                </div>
+
+                {salesTab === 'actual' ? (
+                  <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+                    {boxSession ? (
+                      <>
+                        {/* Resumen del Turno */}
+                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                          <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-col">
+                            <span className="text-gray-500 text-sm font-bold mb-1">Monto Inicial (Caja)</span>
+                            <span className="text-2xl font-black text-gray-800">{formatCurrency(boxSession.initialCash)}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-col">
+                            <span className="text-gray-500 text-sm font-bold mb-1">Ventas en Efectivo</span>
+                            <span className="text-2xl font-black text-emerald-600">{formatCurrency(boxSession.salesEfectivo)}</span>
+                          </div>
+                          <div className="bg-indigo-600 p-4 rounded-2xl border border-indigo-700 shadow-sm flex flex-col text-white relative overflow-hidden">
+                            <div className="absolute -right-4 -bottom-4 opacity-20">
+                              <Wallet size={80} />
+                            </div>
+                            <span className="text-indigo-100 text-sm font-bold mb-1">Efectivo Total en Caja</span>
+                            <span className="text-2xl font-black">{formatCurrency(boxSession.initialCash + boxSession.salesEfectivo)}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-blue-200 shadow-sm flex flex-col">
+                            <span className="text-gray-500 text-sm font-bold mb-1 flex items-center gap-1"><CreditCard size={16} className="text-blue-600"/> Tarjeta (POS)</span>
+                            <span className="text-2xl font-black text-blue-600">{formatCurrency(boxSession.salesTarjeta)}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-purple-200 shadow-sm flex flex-col">
+                            <span className="text-gray-500 text-sm font-bold mb-1 flex items-center gap-1"><Smartphone size={16} className="text-purple-600"/> Yape</span>
+                            <span className="text-2xl font-black text-purple-600">{formatCurrency(boxSession.salesYape)}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-cyan-200 shadow-sm flex flex-col">
+                            <span className="text-gray-500 text-sm font-bold mb-1 flex items-center gap-1"><Smartphone size={16} className="text-cyan-600"/> Plin</span>
+                            <span className="text-2xl font-black text-cyan-600">{formatCurrency(boxSession.salesPlin)}</span>
+                          </div>
+                        </div>
+
+                        {/* Lista de Ventas y Botón Cerrar */}
+                        <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col relative">
+                          <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                            <h3 className="font-bold text-gray-800 flex items-center gap-2"><ShoppingCart size={18}/> Ventas de este turno (Local)</h3>
+                            <button 
+                              onClick={() => setShowCloseBoxModal(true)}
+                              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-red-600/20"
+                            >
+                              <Lock size={18} /> Cerrar Turno Activo
+                            </button>
+                          </div>
+                          <div className="overflow-x-auto flex-1 custom-scrollbar">
+                            <table className="w-full text-left border-collapse">
+                              <thead className="bg-white text-gray-500 text-xs uppercase font-bold sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                  <th className="px-6 py-3">ID Venta</th>
+                                  <th className="px-6 py-3">Hora</th>
+                                  <th className="px-6 py-3">Detalle</th>
+                                  <th className="px-6 py-3">Método Pago</th>
+                                  <th className="px-6 py-3 text-right">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {currentSessionSales.map(sale => {
+                                  const method = PAYMENT_METHODS.find(m => m.id === sale.paymentMethod);
+                                  const MethodIcon = method?.icon || Banknote;
+                                  return (
+                                    <tr key={sale.id} className="hover:bg-gray-50/80 transition-colors">
+                                      <td className="px-6 py-4 font-mono text-indigo-600 font-bold uppercase text-xs">#{sale.id}</td>
+                                      <td className="px-6 py-4 text-sm text-gray-600 font-medium">{formatTime(sale.date)}</td>
+                                      <td className="px-6 py-4">
+                                        <ul className="text-xs space-y-1">
+                                          {sale.items.map(item => (
+                                            <li key={item.id} className="text-gray-700 font-medium">
+                                              <span className="text-indigo-600 font-bold">{item.quantity}x</span> {item.name}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </td>
+                                      <td className="px-6 py-4">
+                                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold text-white uppercase ${method?.color || 'bg-gray-600'}`}>
+                                          <MethodIcon size={12} /> {method?.name}
+                                        </span>
+                                      </td>
+                                      <td className="px-6 py-4 text-right font-black text-emerald-600">{formatCurrency(sale.total)}</td>
+                                    </tr>
+                                  );
+                                })}
+                                {currentSessionSales.length === 0 && (
+                                  <tr><td colSpan="5" className="text-center py-12 text-gray-400 font-medium">Aún no hay ventas en este turno local.</td></tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex-1 flex flex-col items-center justify-center bg-white rounded-2xl border border-gray-200 shadow-sm">
+                        <Lock size={64} className="text-gray-300 mb-4" />
+                        <h3 className="text-xl font-bold text-gray-800 mb-2">La caja está cerrada en este dispositivo</h3>
+                        <p className="text-gray-500">Abre un turno para ver tu progreso local.</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
+                    <div className="overflow-x-auto flex-1 custom-scrollbar">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0 z-10">
+                          <tr>
+                            <th className="px-6 py-4">Apertura / Cierre</th>
+                            <th className="px-6 py-4 text-center">N° Ventas</th>
+                            <th className="px-6 py-4 text-right">Ingresos Digitales</th>
+                            <th className="px-6 py-4 text-right">Efectivo Sistema</th>
+                            <th className="px-6 py-4 text-right">Ef. Declarado</th>
+                            <th className="px-6 py-4 text-right border-l-2 border-gray-200">Descuadre</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {boxReports.map(report => (
+                            <tr key={report.id} className="hover:bg-gray-50/80 transition-colors">
+                              <td className="px-6 py-4 text-sm text-gray-700 font-medium">
+                                <div className="flex flex-col gap-1">
+                                  <span className="flex items-center gap-1 text-emerald-600"><Unlock size={14}/> {formatDate(report.startTime)}</span>
+                                  <span className="flex items-center gap-1 text-red-600"><Lock size={14}/> {formatDate(report.endTime)}</span>
+                                  <span className="text-[10px] text-gray-400 mt-1 uppercase">Cajero: {report.openedBy}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-center font-bold text-gray-600">{report.totalSalesCount}</td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex flex-col items-end gap-1">
+                                  <span className="text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded shadow-sm border border-blue-100 min-w-[100px] text-right">POS: {formatCurrency(report.salesTarjeta)}</span>
+                                  <span className="text-[11px] font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded shadow-sm border border-purple-100 min-w-[100px] text-right">Yape: {formatCurrency(report.salesYape)}</span>
+                                  <span className="text-[11px] font-bold text-cyan-600 bg-cyan-50 px-2 py-0.5 rounded shadow-sm border border-cyan-100 min-w-[100px] text-right">Plin: {formatCurrency(report.salesPlin)}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex flex-col items-end">
+                                  <span className="font-black text-gray-800">{formatCurrency(report.efectivoEsperado)}</span>
+                                  <span className="text-[10px] text-gray-400 font-bold uppercase">Incluye fondo inicial</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <span className="font-black text-gray-800">{formatCurrency(report.efectivoDeclarado)}</span>
+                              </td>
+                              <td className="px-6 py-4 text-right border-l-2 border-gray-200">
+                                <div className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg font-black text-sm shadow-sm border ${
+                                  report.descuadre === 0 
+                                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                                    : report.descuadre > 0 
+                                      ? 'bg-blue-50 text-blue-600 border-blue-200' 
+                                      : 'bg-red-50 text-red-600 border-red-200'
+                                }`}>
+                                  {report.descuadre === 0 ? 'CUADRADO' : report.descuadre > 0 ? `SOBRA: ${formatCurrency(report.descuadre)}` : `FALTA: ${formatCurrency(Math.abs(report.descuadre))}`}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {boxReports.length === 0 && (
+                            <tr><td colSpan="6" className="text-center py-16 text-gray-400 font-medium">No hay reportes de cajas de ningún usuario.</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          };
+
+          const renderUsers = () => (
+            <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
+                  <Users className="text-indigo-600" /> Gestión de Usuarios
+                </h2>
+                <button 
+                  onClick={() => handleOpenUserModal()}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20"
+                >
+                  <Plus size={18} /> Nuevo Usuario
+                </button>
+              </div>
+
+              <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
+                <div className="overflow-x-auto flex-1 custom-scrollbar">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0 z-10">
+                      <tr>
+                        <th className="px-6 py-4">ID</th>
+                        <th className="px-6 py-4">Nombre Completo</th>
+                        <th className="px-6 py-4">Usuario (Login)</th>
+                        <th className="px-6 py-4">Rol de Acceso</th>
+                        <th className="px-6 py-4 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {users.map(u => (
+                        <tr key={u.id} className="hover:bg-gray-50/80 transition-colors">
+                          <td className="px-6 py-4 font-bold text-gray-500">#{u.id}</td>
+                          <td className="px-6 py-4 font-bold text-gray-800">{u.name}</td>
+                          <td className="px-6 py-4 text-gray-600 font-medium">{u.username}</td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase ${u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                              {u.role === 'admin' ? 'Administrador' : 'Personal'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <button 
+                                onClick={() => handleOpenUserModal(u)}
+                                className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                title="Editar"
+                              >
+                                <Edit2 size={18} />
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteUser(u.id)}
+                                disabled={u.id === currentUser?.id}
+                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                title="Eliminar"
+                              >
+                                <Trash2 size={18} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+
+          const renderLoginScreen = () => (
+            <div className="flex h-screen w-full bg-gray-900 items-center justify-center p-4 selection:bg-indigo-500/30">
+              <div className="bg-white rounded-3xl shadow-2xl overflow-hidden w-full max-w-4xl flex flex-col md:flex-row relative">
+                <div className="md:w-1/2 bg-indigo-600 p-12 flex flex-col justify-center items-center text-white relative overflow-hidden min-h-[400px]">
+                  <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
+                    <Wine size={300} className="absolute -left-10 -top-10" />
+                    <Beer size={200} className="absolute right-10 bottom-10" />
+                  </div>
+                  <img 
+                    src="icon-512 (1).png" 
+                    alt="Logo San Duba" 
+                    className="w-32 h-32 object-contain rounded-full border-4 border-white/20 shadow-xl mb-6 relative z-10 bg-white"
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      e.target.src = 'https://ui-avatars.com/api/?name=SD&background=4f46e5&color=fff&rounded=true';
+                    }}
+                  />
+                  <h1 className="text-4xl font-black tracking-wider text-center mb-2 relative z-10">SAN DUBA</h1>
+                  <p className="text-indigo-200 font-bold tracking-widest uppercase text-sm relative z-10">Terraza Club</p>
+                </div>
+                <div className="md:w-1/2 p-12 flex flex-col justify-center bg-gray-50 relative">
+                  
+                  {/* Indicador de Nube en el Login */}
+                  <div className="absolute top-6 right-6 flex items-center gap-2">
+                    {!sysAuthUser ? (
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-amber-500 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200">
+                        <CloudOff size={14}/> Conectando BD...
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-500 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
+                        <Cloud size={14}/> Sincronizado
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mb-8 mt-4">
+                    <h2 className="text-2xl font-black text-gray-900 mb-1">Iniciar Sesión</h2>
+                    <p className="text-gray-500 font-medium text-sm">Ingresa tus credenciales para acceder al POS.</p>
+                  </div>
+                  <form onSubmit={handleLogin} className="space-y-5">
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-1.5">Usuario</label>
+                      <div className="relative">
+                        <UserCircle className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                        <input 
+                          type="text" 
+                          required 
+                          disabled={!sysAuthUser || isSyncing && users.length === 0}
+                          className="w-full bg-white border border-gray-300 rounded-xl py-3 pl-10 pr-4 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all font-medium disabled:bg-gray-100 disabled:text-gray-400" 
+                          placeholder="ej. admin" 
+                          value={loginForm.username} 
+                          onChange={(e) => setLoginForm({...loginForm, username: e.target.value})} 
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-1.5">Contraseña</label>
+                      <div className="relative">
+                        <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                        <input 
+                          type="password" 
+                          required 
+                          disabled={!sysAuthUser || isSyncing && users.length === 0}
+                          className="w-full bg-white border border-gray-300 rounded-xl py-3 pl-10 pr-4 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all font-medium disabled:bg-gray-100 disabled:text-gray-400" 
+                          placeholder="••••••••" 
+                          value={loginForm.password} 
+                          onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} 
+                        />
+                      </div>
+                    </div>
+                    <button 
+                      type="submit" 
+                      disabled={!sysAuthUser || isSyncing && users.length === 0}
+                      className="w-full py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all mt-4 disabled:bg-indigo-400 disabled:shadow-none"
+                    >
+                      {!sysAuthUser ? 'Conectando...' : 'Ingresar al Sistema'}
+                    </button>
+                  </form>
+                  <div className="mt-6 text-center text-xs font-bold text-gray-500 bg-gray-200/50 p-4 rounded-xl border border-gray-200">
+                    <p className="mb-2 uppercase tracking-wide">Credenciales de Prueba:</p>
+                    <div className="grid grid-cols-2 gap-2 text-left">
+                      <div className="bg-white p-2 rounded border border-gray-200"><span className="text-indigo-600">Admin:</span> admin / 123</div>
+                      <div className="bg-white p-2 rounded border border-gray-200"><span className="text-blue-600">Cajero:</span> barras / 123</div>
+                      <div className="bg-white p-2 rounded border border-gray-200 col-span-2"><span className="text-emerald-600">Almacén (Solo Ingresos):</span> almacen / 123</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+
+          if (!currentUser) {
+            return (
+              <>
+                {renderLoginScreen()}
+                {/* Custom Modal Rendering for Alerts inside Login */}
+                {dialog && (
+                  <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full text-center">
+                      <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${dialog.type === 'alert' ? 'bg-indigo-100' : 'bg-amber-100'}`}>
+                         {dialog.type === 'alert' ? <AlertCircle size={32} className="text-indigo-600"/> : <AlertCircle size={32} className="text-amber-500"/>}
+                      </div>
+                      <p className="text-gray-800 font-bold mb-6">{dialog.message}</p>
+                      <div className="flex gap-3">
+                        {dialog.type === 'confirm' && (
+                          <button onClick={() => setDialog(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors">Cancelar</button>
+                        )}
+                        <button 
+                          onClick={() => { if (dialog.type === 'confirm' && dialog.onConfirm) dialog.onConfirm(); setDialog(null); }} 
+                          className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors"
+                        >
+                          {dialog.type === 'confirm' ? 'Confirmar' : 'Aceptar'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          }
+
+          return (
+            <div className="flex h-screen w-full bg-gray-50 font-sans text-gray-900 selection:bg-indigo-100 selection:text-indigo-900">
+              
+              {/* Sidebar Claro */}
+              <div className="w-20 lg:w-64 bg-white border-r border-gray-200 flex flex-col z-20 shadow-sm">
+                <div className="h-24 flex items-center justify-center lg:justify-start lg:px-6 border-b border-gray-100">
+                  <img 
+                    src="icon-512 (1).png" 
+                    alt="Logo San Duba Terraza Club" 
+                    className="w-14 h-14 object-contain rounded-full border border-gray-100 shadow-sm"
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      e.target.src = 'https://ui-avatars.com/api/?name=SD&background=4f46e5&color=fff&rounded=true';
+                    }}
+                  />
+                  <div className="hidden lg:block ml-3 flex flex-col">
+                    <h1 className="font-black text-lg tracking-wider text-gray-900 leading-none">SAN DUBA</h1>
+                    <span className="text-[10px] font-bold text-gray-500 tracking-widest uppercase mt-0.5">Terraza Club</span>
+                  </div>
+                </div>
+                
+                <nav className="flex-1 py-6 flex flex-col gap-2 px-3">
+                  {[
+                    { id: 'pos', name: 'Punto de Venta', icon: ShoppingCart },
+                    { id: 'inventory', name: 'Inventario', icon: Package },
+                    { id: 'kardex', name: 'Kardex', icon: ClipboardList },
+                    { id: 'sales', name: 'Reportes y Ventas', icon: History },
+                    { id: 'users', name: 'Usuarios', icon: Users, adminOnly: true },
+                  ]
+                  .filter(tab => currentUser.role === 'admin' || (!tab.adminOnly && currentUser.allowedSections?.includes(tab.id)))
+                  .map(tab => {
+                    const Icon = tab.icon;
+                    const isActive = activeTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`flex items-center p-3 rounded-xl transition-all duration-200 group ${
+                          isActive 
+                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold' 
+                            : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border border-transparent font-semibold'
+                        }`}
+                      >
+                        <Icon size={24} className={isActive ? 'text-indigo-600' : 'text-gray-400 group-hover:text-indigo-500'} />
+                        <span className="hidden lg:block ml-3">{tab.name}</span>
+                      </button>
+                    )
+                  })}
+                </nav>
+
+                {/* Indicador Status de Caja y Usuario (Sidebar Bottom) */}
+                <div className="p-4 border-t border-gray-100 flex flex-col gap-3">
+                  <div className="flex items-center gap-3 p-2">
+                     <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-700 font-black uppercase shadow-sm">
+                       {currentUser.name.charAt(0)}
+                     </div>
+                     <div className="hidden lg:block overflow-hidden">
+                       <div className="text-sm font-bold text-gray-900 truncate leading-tight">{currentUser.name}</div>
+                       <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{currentUser.role === 'admin' ? 'Administrador' : 'Personal'}</div>
+                     </div>
+                  </div>
+
+                  <div className={`p-3 rounded-xl flex items-center justify-between ${boxSession ? 'bg-emerald-50 border border-emerald-100' : 'bg-red-50 border border-red-100'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${boxSession ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                        {boxSession ? <Unlock size={16}/> : <Lock size={16}/>}
+                      </div>
+                      <div className="hidden lg:block">
+                        <div className={`text-xs font-bold uppercase tracking-wide ${boxSession ? 'text-emerald-700' : 'text-red-700'}`}>
+                          {boxSession ? 'Caja Abierta' : 'Caja Cerrada'}
+                        </div>
+                        {boxSession && <div className="text-[10px] text-emerald-600 font-medium">Local</div>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {boxSession && (
+                     <button
+                       onClick={() => setShowCloseBoxModal(true)}
+                       className="w-full flex items-center justify-center gap-2 p-3 rounded-xl text-white bg-red-600 hover:bg-red-700 shadow-md shadow-red-600/20 transition-all font-bold"
+                     >
+                       <Lock size={18} />
+                       <span className="hidden lg:inline">Cerrar Caja</span>
+                     </button>
+                  )}
+
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center justify-center gap-2 p-3 rounded-xl text-gray-500 hover:bg-gray-200 hover:text-gray-700 transition-colors font-bold border border-transparent"
+                  >
+                    <LogOut size={18} />
+                    <span className="hidden lg:inline">Cerrar Sesión</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Main Content */}
+              <main className="flex-1 relative">
+                {activeTab === 'pos' && renderPOS()}
+                {activeTab === 'inventory' && renderInventory()}
+                {activeTab === 'kardex' && renderKardex()}
+                {activeTab === 'sales' && renderSales()}
+                {activeTab === 'users' && currentUser.role === 'admin' && renderUsers()}
+              </main>
+
+              {/* Modales de la Aplicación */}
+              {showPaymentModal && (
+                <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl">
+                    <div className="p-8 text-center border-b border-gray-100 bg-gray-50">
+                      <h3 className="text-lg font-bold text-gray-500 mb-2 uppercase tracking-wide">Total a Cobrar</h3>
+                      <div className="text-5xl font-black text-gray-900">{formatCurrency(cartTotal)}</div>
+                    </div>
+                    <div className="p-8">
+                      <p className="text-gray-500 mb-6 text-center text-sm font-semibold">Selecciona el método de pago</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        {PAYMENT_METHODS.map(method => {
+                          const Icon = method.icon;
+                          return (
+                            <button
+                              key={method.id}
+                              onClick={() => handleCheckout(method.id)}
+                              className={`${method.color} hover:brightness-110 text-white p-5 rounded-2xl flex flex-col items-center justify-center gap-3 transition-all active:scale-95 shadow-md`}
+                            >
+                              <Icon size={32} />
+                              <span className="font-bold">{method.name}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <div className="p-4 bg-gray-50">
+                      <button 
+                        onClick={() => setShowPaymentModal(false)}
+                        className="w-full py-3.5 rounded-xl font-bold text-gray-600 hover:bg-gray-200 transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {showStockModal && (
+                <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl">
+                    <div className="p-6 border-b border-gray-100 bg-gray-50">
+                      <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                        <ArrowUpCircle className="text-emerald-600" /> Ingreso de Mercadería
+                      </h3>
+                    </div>
+                    <form onSubmit={handleAddStock} className="p-6 space-y-5">
+                      
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5">Producto</label>
+                        <select 
+                          required
+                          className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent font-medium"
+                          value={stockForm.productId}
+                          onChange={(e) => setStockForm({...stockForm, productId: e.target.value})}
+                        >
+                          <option value="">-- Seleccionar Producto --</option>
+                          {products.map(p => (
+                            <option key={p.id} value={p.id}>{p.name} (Stock: {p.stock})</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5">Cantidad a ingresar</label>
+                        <input 
+                          type="number" 
+                          min="1"
+                          required
+                          className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent font-medium"
+                          value={stockForm.quantity}
+                          onChange={(e) => setStockForm({...stockForm, quantity: e.target.value})}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5">Motivo / Detalle</label>
+                        <input 
+                          type="text" 
+                          required
+                          className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent font-medium"
+                          value={stockForm.reason}
+                          onChange={(e) => setStockForm({...stockForm, reason: e.target.value})}
+                          placeholder="Ej: Compra a proveedor Backus"
+                        />
+                      </div>
+
+                      <div className="flex gap-3 pt-4">
+                        <button 
+                          type="button"
+                          onClick={() => setShowStockModal(false)}
+                          className="flex-1 py-3.5 rounded-xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          className="flex-1 py-3.5 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-600/30 transition-all"
+                        >
+                          Registrar
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {showProductModal && (
+                <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl">
+                    <div className="p-6 border-b border-gray-100 bg-gray-50">
+                      <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                        <Package className="text-indigo-600" /> 
+                        {productForm.id ? 'Editar Producto' : 'Nuevo Producto'}
+                      </h3>
+                    </div>
+                    <form onSubmit={handleSaveProduct} className="p-6 space-y-4">
+                      
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5">Nombre del Producto</label>
+                        <input 
+                          type="text" 
+                          required
+                          className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium"
+                          value={productForm.name}
+                          onChange={(e) => setProductForm({...productForm, name: e.target.value})}
+                          placeholder="Ej: Cerveza Cristal 650ml"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-1.5">Categoría</label>
+                          <select 
+                            required
+                            className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium"
+                            value={productForm.category}
+                            onChange={(e) => setProductForm({...productForm, category: e.target.value})}
+                          >
+                            <option value="" disabled>Seleccione...</option>
+                            {categories.map(cat => (
+                              <option key={cat} value={cat}>{cat}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-1.5">Precio de Venta (S/)</label>
+                          <input 
+                            type="number" 
+                            step="0.10"
+                            min="0"
+                            required
+                            className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium"
+                            value={productForm.price}
+                            onChange={(e) => setProductForm({...productForm, price: e.target.value})}
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-1.5">Stock Inicial</label>
+                          <input 
+                            type="number" 
+                            min="0"
+                            required={!productForm.id}
+                            disabled={!!productForm.id} 
+                            className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium disabled:bg-gray-100 disabled:text-gray-500"
+                            value={productForm.stock}
+                            onChange={(e) => setProductForm({...productForm, stock: e.target.value})}
+                            placeholder="0"
+                          />
+                          {!!productForm.id && <p className="text-[10px] text-gray-500 mt-1 leading-tight">Usa "Ingresar Stock" para modificar el inventario.</p>}
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-1.5">URL de Imagen</label>
+                          <input 
+                            type="url" 
+                            className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium"
+                            value={productForm.image}
+                            onChange={(e) => setProductForm({...productForm, image: e.target.value})}
+                            placeholder="https://..."
+                          />
+                          <p className="text-[10px] text-gray-500 mt-1 leading-tight">Dejar vacío para auto-generar miniatura.</p>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3 pt-4">
+                        <button 
+                          type="button"
+                          onClick={() => setShowProductModal(false)}
+                          className="flex-1 py-3.5 rounded-xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          className="flex-1 py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all"
+                        >
+                          {productForm.id ? 'Guardar Cambios' : 'Crear Producto'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {showCategoryModal && (
+                <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col max-h-[80vh]">
+                    <div className="p-6 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                      <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                        <Tags className="text-indigo-600" /> Categorías
+                      </h3>
+                    </div>
+                    
+                    <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
+                      <form onSubmit={handleAddCategory} className="flex gap-2 mb-6">
+                        <input 
+                          type="text" 
+                          required
+                          placeholder="Nueva categoría..."
+                          className="flex-1 bg-white border border-gray-300 rounded-xl px-4 py-2 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                          value={newCategoryName}
+                          onChange={(e) => setNewCategoryName(e.target.value)}
+                        />
+                        <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-xl transition-all shadow-sm">
+                          <Plus size={20} />
+                        </button>
+                      </form>
+
+                      <div className="space-y-2">
+                        {categories.map(cat => (
+                          <div key={cat} className="flex justify-between items-center p-3 bg-gray-50 border border-gray-100 rounded-xl">
+                            <span className="font-bold text-gray-700">{cat}</span>
+                            <button 
+                              onClick={() => handleDeleteCategory(cat)}
+                              className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                              title="Eliminar Categoría"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-gray-50 border-t border-gray-100">
+                      <button 
+                        onClick={() => setShowCategoryModal(false)}
+                        className="w-full py-3 rounded-xl font-bold text-gray-600 bg-gray-200 hover:bg-gray-300 transition-colors"
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {showCloseBoxModal && boxSession && (
+                <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl">
+                    <div className="p-8 text-center border-b border-gray-100 bg-red-50">
+                      <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <AlertCircle size={32} className="text-red-600" />
+                      </div>
+                      <h3 className="text-xl font-black text-gray-900 mb-2">Cierre de Caja</h3>
+                      <p className="text-gray-600 font-medium">Cuenta todo el efectivo que tienes en físico e ingrésalo a continuación.</p>
+                    </div>
+                    
+                    <form onSubmit={handleCloseBox}>
+                      {currentUser?.role === 'admin' && (
+                        <div className="px-6 pt-6 pb-2 bg-gray-50 space-y-3 border-b border-gray-200">
+                          <div className="flex justify-between text-sm">
+                            <span className="font-bold text-gray-500">Total Ventas (Cantidad):</span>
+                            <span className="font-black text-gray-800">{boxSession.totalSalesCount}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="font-bold text-gray-500">Monto Esperado en Físico:</span>
+                            <span className="font-black text-emerald-600 text-lg">{formatCurrency(boxSession.initialCash + boxSession.salesEfectivo)}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="p-6">
+                        <label className="block text-sm font-bold text-gray-700 mb-2">Efectivo Declarado (Billetes y Monedas)</label>
+                        <div className="relative">
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">S/</span>
+                          <input 
+                            type="number" 
+                            step="0.10"
+                            min="0"
+                            required
+                            autoFocus
+                            className="w-full bg-white border border-gray-300 rounded-xl py-3 pl-10 pr-4 text-gray-900 font-bold text-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all"
+                            value={declaredCashForm}
+                            onChange={(e) => setDeclaredCashForm(e.target.value)}
+                            placeholder="0.00"
+                          />
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2 font-medium">Este valor se guardará en el reporte para cuadrar caja.</p>
+                      </div>
+
+                      <div className="p-6 flex gap-3 pt-0">
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            setShowCloseBoxModal(false);
+                            setDeclaredCashForm('');
+                          }}
+                          className="flex-1 py-3.5 rounded-xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          className="flex-1 py-3.5 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-600/30 transition-all flex justify-center items-center gap-2"
+                        >
+                          <Lock size={18}/> Cerrar Turno
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {showUserModal && (
+                <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+                    <div className="p-6 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+                      <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                        <UserCircle className="text-indigo-600" /> 
+                        {userForm.id ? 'Editar Usuario' : 'Nuevo Usuario'}
+                      </h3>
+                    </div>
+                    
+                    <form onSubmit={handleSaveUser} className="flex flex-col flex-1 overflow-hidden">
+                      <div className="p-6 space-y-5 overflow-y-auto custom-scrollbar">
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-1.5">Nombre Completo</label>
+                          <input 
+                            type="text" 
+                            required
+                            className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                            value={userForm.name}
+                            onChange={(e) => setUserForm({...userForm, name: e.target.value})}
+                            placeholder="Ej: Juan Pérez"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-bold text-gray-700 mb-1.5">Usuario (Login)</label>
+                            <input 
+                              type="text" 
+                              required
+                              className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                              value={userForm.username}
+                              onChange={(e) => setUserForm({...userForm, username: e.target.value})}
+                              placeholder="Ej: jperez"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-bold text-gray-700 mb-1.5">Contraseña</label>
+                            <input 
+                              type="text" 
+                              required
+                              className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                              value={userForm.password}
+                              onChange={(e) => setUserForm({...userForm, password: e.target.value})}
+                              placeholder="Contraseña"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-1.5">Nivel de Acceso</label>
+                          <select 
+                            required
+                            className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                            value={userForm.role}
+                            onChange={(e) => setUserForm({...userForm, role: e.target.value})}
+                          >
+                            <option value="personal">Personal / Empleado (Permisos a medida)</option>
+                            <option value="admin">Administrador (Acceso Total a Todo)</option>
+                          </select>
+                        </div>
+
+                        {userForm.role === 'personal' && (
+                          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 space-y-4">
+                            <div>
+                              <label className="block text-sm font-bold text-gray-900 mb-2 border-b border-gray-200 pb-2">Secciones Permitidas</label>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {SECTION_OPTIONS.map(sec => (
+                                  <label key={sec.id} className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-colors ${userForm.allowedSections?.includes(sec.id) ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-gray-200 hover:bg-gray-100'}`}>
+                                    <input
+                                      type="checkbox"
+                                      checked={userForm.allowedSections?.includes(sec.id) || false}
+                                      onChange={(e) => {
+                                        const current = userForm.allowedSections || [];
+                                        if (e.target.checked) setUserForm({...userForm, allowedSections: [...current, sec.id]});
+                                        else setUserForm({...userForm, allowedSections: current.filter(s => s !== sec.id)});
+                                      }}
+                                      className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                                    />
+                                    <span className={`text-sm font-bold ${userForm.allowedSections?.includes(sec.id) ? 'text-indigo-700' : 'text-gray-700'}`}>{sec.name}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+
+                            {userForm.allowedSections?.includes('pos') && (
+                              <div className="animate-in fade-in slide-in-from-top-2">
+                                <label className="block text-sm font-bold text-gray-900 mb-2 border-b border-gray-200 pb-2 flex items-center gap-2">
+                                  <ShoppingCart size={16}/> Permisos de Venta en POS (Categorías)
+                                </label>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {categories.map(cat => (
+                                    <label key={cat} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${userForm.allowedCategories?.includes(cat) ? 'text-indigo-700 font-bold' : 'text-gray-600 font-medium hover:bg-gray-200'}`}>
+                                      {userForm.allowedCategories?.includes(cat) ? <CheckSquare size={16} className="text-indigo-600"/> : <Square size={16} className="text-gray-400"/>}
+                                      <input
+                                        type="checkbox"
+                                        className="hidden"
+                                        checked={userForm.allowedCategories?.includes(cat) || false}
+                                        onChange={(e) => {
+                                          const current = userForm.allowedCategories || [];
+                                          if (e.target.checked) setUserForm({...userForm, allowedCategories: [...current, cat]});
+                                          else setUserForm({...userForm, allowedCategories: current.filter(c => c !== cat)});
+                                        }}
+                                      />
+                                      <span className="text-sm">{cat}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="p-6 flex gap-3 border-t border-gray-100 bg-gray-50 flex-shrink-0">
+                        <button 
+                          type="button"
+                          onClick={() => setShowUserModal(false)}
+                          className="flex-1 py-3.5 rounded-xl font-bold text-gray-600 bg-gray-200 hover:bg-gray-300 transition-colors"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          className="flex-1 py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all"
+                        >
+                          {userForm.id ? 'Guardar Cambios' : 'Crear Usuario'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {/* Custom Modal Rendering for Global Alerts */}
+              {dialog && (
+                <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+                  <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full text-center">
+                    <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${dialog.type === 'alert' ? 'bg-indigo-100' : 'bg-amber-100'}`}>
+                       {dialog.type === 'alert' ? <AlertCircle size={32} className="text-indigo-600"/> : <AlertCircle size={32} className="text-amber-500"/>}
+                    </div>
+                    <p className="text-gray-800 font-bold mb-6">{dialog.message}</p>
+                    <div className="flex gap-3">
+                      {dialog.type === 'confirm' && (
+                        <button onClick={() => setDialog(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors">Cancelar</button>
+                      )}
+                      <button 
+                        onClick={() => { if (dialog.type === 'confirm' && dialog.onConfirm) dialog.onConfirm(); setDialog(null); }} 
+                        className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors"
+                      >
+                        {dialog.type === 'confirm' ? 'Confirmar' : 'Aceptar'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<DiscotecaPOS />);
+    </script>
+</body>
+</html>
