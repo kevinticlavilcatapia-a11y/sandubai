@@ -48,7 +48,7 @@
           AlertCircle, Utensils, Pizza, Martini,
           Users, LogOut, UserCircle, Key, CheckSquare, Square,
           Calendar, PieChart, Download, Printer,
-          Cloud, CloudOff, Activity, ShoppingBag, TrendingDown, Receipt
+          Cloud, CloudOff, Activity, ShoppingBag, TrendingDown, Receipt, Gift
         } from 'https://esm.sh/lucide-react@0.292.0';
 
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
@@ -94,7 +94,7 @@
           { id: 16, name: 'Cuba Libre', category: 'Tragos Cortos', price: 18.00, stock: 45, image: 'https://picsum.photos/seed/cubalibre/200/300' },
         ];
 
-        const INITIAL_CATEGORIES = ['Cervezas', 'Aguas', 'Gaseosas', 'Cigarros', 'Piqueos', 'Comidas', 'Tragos Cortos'];
+        const INITIAL_CATEGORIES = ['Cervezas', 'Aguas', 'Gaseosas', 'Cigarros', 'Piqueos', 'Comidas', 'Tragos Cortos', 'Promociones'];
 
         const SECTION_OPTIONS = [
           { id: 'pos', name: 'Punto de Venta (Caja)' },
@@ -106,7 +106,7 @@
 
         const INITIAL_USERS = [
           { id: 1, name: 'Administrador General', username: 'admin', password: '123', role: 'admin', allowedSections: [], allowedCategories: [] },
-          { id: 2, name: 'Cajero Barras', username: 'barras', password: '123', role: 'personal', allowedSections: ['pos'], allowedCategories: ['Cervezas', 'Aguas', 'Gaseosas', 'Cigarros', 'Tragos Cortos'] },
+          { id: 2, name: 'Cajero Barras', username: 'barras', password: '123', role: 'personal', allowedSections: ['pos'], allowedCategories: ['Cervezas', 'Aguas', 'Gaseosas', 'Cigarros', 'Tragos Cortos', 'Promociones'] },
           { id: 3, name: 'Almacenero', username: 'almacen', password: '123', role: 'personal', allowedSections: ['inventory', 'purchases'], allowedCategories: [] }
         ];
 
@@ -119,7 +119,7 @@
           { id: 'plin', name: 'Plin', icon: Smartphone, color: 'bg-cyan-600' },
         ];
 
-        const DEFAULT_PRODUCT_FORM = { id: null, name: '', category: 'Cervezas', price: '', stock: '', image: '' };
+        const DEFAULT_PRODUCT_FORM = { id: null, name: '', category: 'Cervezas', price: '', stock: '', image: '', isPromotion: false, baseProductId: '', baseQuantity: 1 };
 
         function DiscotecaPOS() {
           // --- Estados de Conexión (Firebase) ---
@@ -149,6 +149,10 @@
           };
           const [filterStartDate, setFilterStartDate] = useState(getTodayStr());
           const [filterEndDate, setFilterEndDate] = useState(getTodayStr());
+          const [purchasesStartDate, setPurchasesStartDate] = useState(getTodayStr());
+          const [purchasesEndDate, setPurchasesEndDate] = useState(getTodayStr());
+          const [expensesStartDate, setExpensesStartDate] = useState(getTodayStr());
+          const [expensesEndDate, setExpensesEndDate] = useState(getTodayStr());
 
           // --- Estados de Sesión Local ---
           const [currentUser, setCurrentUser] = useState(null); 
@@ -292,6 +296,47 @@
           }, [activeSessions, currentUser]);
 
 
+          // --- Lógica de Promociones y Stock Virtual ---
+          const getVirtualStock = (product) => {
+            if (product.isPromotion) {
+              const baseProd = products.find(p => p.id === parseInt(product.baseProductId));
+              if (!baseProd) return 0;
+              return Math.floor(baseProd.stock / (parseInt(product.baseQuantity) || 1));
+            }
+            return product.stock;
+          };
+
+          const canAddToCart = (productToAdd, qtyToAdd) => {
+            // Construir un carrito proyectado simulado
+            const projectedCart = cart.map(item => ({...item}));
+            const existing = projectedCart.find(i => i.id === productToAdd.id);
+            
+            if (existing) {
+              existing.quantity += qtyToAdd;
+              if (existing.quantity < 1) return true; // Quitar items siempre es válido
+            } else {
+              if (qtyToAdd > 0) projectedCart.push({ ...productToAdd, quantity: qtyToAdd });
+            }
+            
+            // Agregar las deducciones necesarias del carrito proyectado
+            const stockReq = {};
+            for (const item of projectedCart) {
+              if (item.isPromotion) {
+                const bId = parseInt(item.baseProductId);
+                stockReq[bId] = (stockReq[bId] || 0) + (item.quantity * parseInt(item.baseQuantity));
+              } else {
+                stockReq[item.id] = (stockReq[item.id] || 0) + item.quantity;
+              }
+            }
+            
+            // Validar requerimientos contra el stock real de los productos base
+            for (const [pId, reqQty] of Object.entries(stockReq)) {
+              const dbProd = products.find(p => p.id === parseInt(pId));
+              if (!dbProd || dbProd.stock < reqQty) return false;
+            }
+            return true;
+          };
+
           // --- Funciones de Caja ---
           const handleOpenBox = async (e) => {
             e.preventDefault();
@@ -348,14 +393,12 @@
 
           // --- Funciones del Carrito y Ventas ---
           const addToCart = (product) => {
-            const existingItem = cart.find(item => item.id === product.id);
-            const currentQtyInCart = existingItem ? existingItem.quantity : 0;
-
-            if (currentQtyInCart >= product.stock) {
-              setDialog({ type: 'alert', message: '¡No hay suficiente stock! (Sincronizado con otras cajas)' });
+            if (!canAddToCart(product, 1)) {
+              setDialog({ type: 'alert', message: '¡No hay suficiente stock base para agregar este producto! (Revisa las promociones o el stock actual)' });
               return;
             }
 
+            const existingItem = cart.find(item => item.id === product.id);
             if (existingItem) {
               setCart(cart.map(item => 
                 item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
@@ -367,14 +410,15 @@
 
           const updateCartQuantity = (id, delta) => {
             const product = products.find(p => p.id === id);
+            
+            if (delta > 0 && !canAddToCart(product, delta)) {
+                setDialog({ type: 'alert', message: '¡Stock máximo alcanzado en este momento para la suma de tus pedidos!' });
+                return;
+            }
+
             setCart(cart.map(item => {
               if (item.id === id) {
-                const newQty = item.quantity + delta;
-                if (newQty > product.stock) {
-                  setDialog({ type: 'alert', message: '¡Stock máximo alcanzado en este momento!' });
-                  return item;
-                }
-                return { ...item, quantity: Math.max(1, newQty) };
+                return { ...item, quantity: Math.max(1, item.quantity + delta) };
               }
               return item;
             }));
@@ -390,24 +434,34 @@
             const saleId = Math.random().toString(36).substr(2, 9);
             const now = new Date();
 
-            // 1. Validar y Actualizar Stock en la Nube
+            // 1. Consolidar deducciones totales (Agrupa combos y productos base normales)
+            const stockDeductions = {}; 
             for (const item of cart) {
-              const dbProduct = products.find(p => p.id === item.id);
-              if (dbProduct.stock < item.quantity) {
-                 setDialog({ type: 'alert', message: `No hay stock suficiente de ${dbProduct.name}. Alguien más pudo haberlo vendido. Revisa el stock y reintenta.` });
+              if (item.isPromotion) {
+                const bId = parseInt(item.baseProductId);
+                stockDeductions[bId] = (stockDeductions[bId] || 0) + (item.quantity * parseInt(item.baseQuantity));
+              } else {
+                stockDeductions[item.id] = (stockDeductions[item.id] || 0) + item.quantity;
+              }
+            }
+
+            // 2. Validar Stock Final en la Nube
+            for (const [pId, deductQty] of Object.entries(stockDeductions)) {
+              const dbProduct = products.find(p => p.id === parseInt(pId));
+              if (!dbProduct || dbProduct.stock < deductQty) {
+                 setDialog({ type: 'alert', message: `No hay stock suficiente de "${dbProduct?.name || 'un producto base'}". Alguien más pudo haberlo vendido. Revisa el stock y reintenta.` });
                  return;
               }
             }
 
-            // Si hay stock, procesar venta...
-            for (const item of cart) {
-              const dbProduct = products.find(p => p.id === item.id);
-              const newStock = dbProduct.stock - item.quantity;
-              
+            // 3. Procesar Ventas y Deducciones
+            for (const [pId, deductQty] of Object.entries(stockDeductions)) {
+              const dbProduct = products.find(p => p.id === parseInt(pId));
+              const newStock = dbProduct.stock - deductQty;
               await setDoc(getDocRef('pos_products', dbProduct.id.toString()), { ...dbProduct, stock: newStock });
             }
 
-            // 2. Guardar Venta
+            // Guardar Venta
             const newSale = {
               id: saleId,
               sessionId: boxSession.id,
@@ -419,7 +473,7 @@
             };
             await setDoc(getDocRef('pos_sales', saleId), newSale);
 
-            // 3. Actualizar Totales en Sesión de Caja (Firebase)
+            // Actualizar Totales en Sesión de Caja (Firebase)
             const updatedSession = {
               ...boxSession,
               salesEfectivo: boxSession.salesEfectivo + (paymentMethodId === 'efectivo' ? cartTotal : 0),
@@ -610,14 +664,22 @@
 
           const handleSaveProduct = async (e) => {
             e.preventDefault();
+
+            if (productForm.isPromotion && (!productForm.baseProductId || !productForm.baseQuantity || productForm.baseQuantity <= 0)) {
+              setDialog({ type: 'alert', message: 'Para una promoción, debes seleccionar un producto base y una cantidad a descontar válida.' });
+              return;
+            }
             
             const newId = productForm.id || (products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1);
             const productData = {
               ...productForm,
               id: newId,
               price: parseFloat(productForm.price),
-              stock: parseInt(productForm.stock) || 0,
-              image: productForm.image || `https://picsum.photos/seed/${productForm.name.replace(/\s/g, '')}/200/300`
+              stock: productForm.isPromotion ? 0 : (parseInt(productForm.stock) || 0), // Promo no tiene stock real
+              image: productForm.image || `https://picsum.photos/seed/${productForm.name.replace(/\s/g, '')}/200/300`,
+              isPromotion: productForm.isPromotion || false,
+              baseProductId: productForm.isPromotion ? parseInt(productForm.baseProductId) : null,
+              baseQuantity: productForm.isPromotion ? parseInt(productForm.baseQuantity) : null
             };
 
             await setDoc(getDocRef('pos_products', newId.toString()), productData);
@@ -639,6 +701,8 @@
             if (!productId || qty <= 0) return;
 
             const product = products.find(p => p.id === productId);
+            if (product.isPromotion) return; // Por seguridad
+
             const newStock = product.stock + qty;
 
             await setDoc(getDocRef('pos_products', productId.toString()), { ...product, stock: newStock });
@@ -678,6 +742,7 @@
               case 'piqueos': return <Pizza size={18} />;
               case 'comidas': return <Utensils size={18} />;
               case 'tragos cortos': return <Martini size={18} />;
+              case 'promociones': return <Gift size={18} />;
               default: return <Package size={18} />;
             }
           };
@@ -781,16 +846,25 @@
                   {/* Grilla de Productos */}
                   <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-20">
-                      {filteredProducts.map(product => (
+                      {filteredProducts.map(product => {
+                        const stockVisual = getVirtualStock(product);
+                        return (
                         <div 
                           key={product.id}
-                          onClick={() => product.stock > 0 && addToCart(product)}
+                          onClick={() => stockVisual > 0 && addToCart(product)}
                           className={`relative bg-white rounded-xl p-3 border-2 transition-all cursor-pointer select-none flex flex-col justify-start h-full shadow-sm hover:shadow-md ${
-                            product.stock > 0 
+                            stockVisual > 0 
                               ? 'border-transparent hover:border-indigo-500 active:scale-95' 
                               : 'border-red-100 opacity-60 cursor-not-allowed grayscale-[50%]'
                           }`}
                         >
+                          {/* Etiqueta Promoción */}
+                          {product.isPromotion && (
+                             <div className="absolute top-0 right-0 bg-rose-500 text-white text-[9px] font-black uppercase px-2 py-1 rounded-bl-lg rounded-tr-lg z-10 shadow-sm flex items-center gap-1">
+                               <Gift size={10}/> Combo
+                             </div>
+                          )}
+
                           {/* Imagen del Producto */}
                           <div className="aspect-[3/4] w-full bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center mb-3 relative">
                             {product.image ? (
@@ -807,15 +881,16 @@
                             </div>
                             <div className="flex justify-between items-end mt-auto pt-2">
                               <span className="text-lg font-black text-emerald-600">{formatCurrency(product.price)}</span>
-                              <span className={`text-xs px-2 py-1 rounded-md font-bold transition-colors duration-500 ${
-                                product.stock > 10 ? 'bg-gray-100 text-gray-600' : 'bg-red-100 text-red-600 animate-pulse'
+                              <span className={`text-xs px-2 py-1 rounded-md font-bold transition-colors duration-500 flex flex-col items-center ${
+                                stockVisual > 10 ? 'bg-gray-100 text-gray-600' : 'bg-red-100 text-red-600 animate-pulse'
                               }`}>
-                                Stock: {product.stock}
+                                {product.isPromotion ? <span className="text-[9px] uppercase font-bold leading-none mb-0.5">Stock Máx</span> : 'Stock:'} 
+                                <span>{stockVisual}</span>
                               </span>
                             </div>
                           </div>
                         </div>
-                      ))}
+                      )})}
                       {filteredProducts.length === 0 && (
                         <div className="col-span-full flex flex-col items-center justify-center text-gray-400 h-64">
                            <Package size={48} className="mb-4 opacity-50" />
@@ -846,9 +921,13 @@
                     ) : (
                       <div className="space-y-3">
                         {cart.map(item => (
-                          <div key={item.id} className="bg-white rounded-xl p-3 flex flex-col gap-2 border border-gray-200 shadow-sm">
+                          <div key={item.id} className="bg-white rounded-xl p-3 flex flex-col gap-2 border border-gray-200 shadow-sm relative overflow-hidden">
+                            {item.isPromotion && <div className="absolute top-0 right-0 bg-rose-500 w-1.5 h-full"></div>}
                             <div className="flex justify-between items-start gap-2">
-                              <span className="font-semibold text-gray-800 text-sm leading-tight flex-1">{item.name}</span>
+                              <span className="font-semibold text-gray-800 text-sm leading-tight flex-1">
+                                {item.isPromotion && <Gift size={12} className="inline mr-1 text-rose-500 -mt-0.5"/>}
+                                {item.name}
+                              </span>
                               <button onClick={() => removeFromCart(item.id)} className="text-red-500 hover:text-red-700 bg-red-50 p-1.5 rounded-lg transition-colors">
                                 <Trash2 size={16} />
                               </button>
@@ -918,7 +997,7 @@
                         onClick={() => handleOpenProductModal()}
                         className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20"
                       >
-                        <Plus size={18} /> Nuevo Producto
+                        <Plus size={18} /> Nuevo Producto / Promo
                       </button>
                     </>
                   )}
@@ -947,23 +1026,38 @@
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {products.map(p => (
+                      {products.map(p => {
+                        const visualStock = getVirtualStock(p);
+                        return (
                         <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
                           <td className="px-6 py-3">
-                             <div className="w-10 h-14 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex items-center justify-center">
+                             <div className="w-10 h-14 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex items-center justify-center relative">
+                                {p.isPromotion && <div className="absolute top-0 right-0 w-3 h-3 bg-rose-500 rounded-bl-lg z-10"></div>}
                                 {p.image ? <img src={p.image} alt={p.name} className="w-full h-full object-cover" /> : <ImageIcon size={16} className="text-gray-400"/>}
                              </div>
                           </td>
-                          <td className="px-6 py-4 font-bold text-gray-800">{p.name}</td>
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-gray-800">{p.name}</div>
+                            {p.isPromotion && <div className="text-[10px] text-gray-500 font-bold uppercase mt-0.5">Combo (Descuenta {p.baseQuantity}x Base ID:{p.baseProductId})</div>}
+                          </td>
                           <td className="px-6 py-4">
                             <span className="bg-gray-100 text-gray-600 border border-gray-200 px-3 py-1 rounded-full text-xs font-semibold">{p.category}</span>
                           </td>
                           <td className="px-6 py-4 font-bold text-emerald-600">{formatCurrency(p.price)}</td>
-                          <td className="px-6 py-4 text-center font-black text-lg text-gray-700 transition-colors">{p.stock}</td>
+                          <td className="px-6 py-4 text-center font-black text-lg text-gray-700 transition-colors">
+                            {p.isPromotion ? (
+                              <div className="flex flex-col items-center leading-tight">
+                                <span className="text-rose-600">{visualStock}</span>
+                                <span className="text-[9px] text-gray-400 font-bold uppercase mt-1">Máx Posible</span>
+                              </div>
+                            ) : (
+                              visualStock
+                            )}
+                          </td>
                           <td className="px-6 py-4 text-center">
-                            {p.stock > 20 ? (
+                            {visualStock > 20 ? (
                               <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full text-xs font-bold">Óptimo</span>
-                            ) : p.stock > 0 ? (
+                            ) : visualStock > 0 ? (
                               <span className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full text-xs font-bold">Bajo</span>
                             ) : (
                               <span className="inline-flex items-center gap-1.5 bg-red-100 text-red-700 px-2.5 py-1 rounded-full text-xs font-bold">Agotado</span>
@@ -990,7 +1084,7 @@
                             </td>
                           )}
                         </tr>
-                      ))}
+                      )})}
                       {products.length === 0 && (
                         <tr><td colSpan={currentUser?.role === 'admin' ? 7 : 6} className="text-center py-12 text-gray-500">No hay productos registrados en el inventario.</td></tr>
                       )}
@@ -1003,6 +1097,15 @@
 
           // VISTA COMPRAS
           const renderPurchases = () => {
+             const startObjP = purchasesStartDate ? new Date(purchasesStartDate + 'T00:00:00') : new Date('2000-01-01');
+             const endObjP = purchasesEndDate ? new Date(purchasesEndDate + 'T23:59:59') : new Date('2100-01-01');
+             const filteredPurchases = purchases.filter(p => {
+               const d = new Date(p.date);
+               return d >= startObjP && d <= endObjP;
+             });
+
+             const totalPurchasesRange = filteredPurchases.reduce((sum, p) => sum + p.total, 0);
+
              return (
                <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
                  <div className="flex justify-between items-center mb-6">
@@ -1015,6 +1118,38 @@
                     >
                       <Plus size={18} /> Registrar Compra (Factura/Boleta)
                     </button>
+                  </div>
+
+                  {/* Filtros de Fecha para Compras */}
+                  <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-wrap items-center gap-4 mb-4 flex-shrink-0">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="text-gray-400" size={20} />
+                      <span className="font-bold text-gray-700">Desde:</span>
+                      <input 
+                        type="date" 
+                        value={purchasesStartDate} 
+                        onChange={e => setPurchasesStartDate(e.target.value)} 
+                        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none" 
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-gray-700">Hasta:</span>
+                      <input 
+                        type="date" 
+                        value={purchasesEndDate} 
+                        onChange={e => setPurchasesEndDate(e.target.value)} 
+                        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none" 
+                      />
+                    </div>
+                    <div className="ml-auto flex items-center gap-3">
+                      <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">
+                        {filteredPurchases.length} registros
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-500">Total Invertido:</span>
+                        <span className="text-xl font-black text-emerald-600">{formatCurrency(totalPurchasesRange)}</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
@@ -1031,7 +1166,7 @@
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {purchases.map(p => (
+                          {filteredPurchases.map(p => (
                             <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(p.date)}</td>
                               <td className="px-6 py-4">
@@ -1052,8 +1187,8 @@
                               <td className="px-6 py-4 text-sm text-gray-600 uppercase">{p.registeredBy}</td>
                             </tr>
                           ))}
-                          {purchases.length === 0 && (
-                            <tr><td colSpan="6" className="text-center py-12 text-gray-500">No hay compras registradas en el historial.</td></tr>
+                          {filteredPurchases.length === 0 && (
+                            <tr><td colSpan="6" className="text-center py-12 text-gray-500">No hay compras registradas en este rango de fechas.</td></tr>
                           )}
                         </tbody>
                       </table>
@@ -1065,7 +1200,16 @@
 
           // VISTA EGRESOS
           const renderExpenses = () => {
-            return (
+             const startObjE = expensesStartDate ? new Date(expensesStartDate + 'T00:00:00') : new Date('2000-01-01');
+             const endObjE = expensesEndDate ? new Date(expensesEndDate + 'T23:59:59') : new Date('2100-01-01');
+             const filteredExpenses = expenses.filter(e => {
+               const d = new Date(e.date);
+               return d >= startObjE && d <= endObjE;
+             });
+
+             const totalExpensesRange = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
+
+             return (
                <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
                  <div className="flex justify-between items-center mb-6">
                     <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
@@ -1077,6 +1221,38 @@
                     >
                       <Plus size={18} /> Nuevo Egreso
                     </button>
+                  </div>
+
+                  {/* Filtros de Fecha para Egresos */}
+                  <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-wrap items-center gap-4 mb-4 flex-shrink-0">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="text-gray-400" size={20} />
+                      <span className="font-bold text-gray-700">Desde:</span>
+                      <input 
+                        type="date" 
+                        value={expensesStartDate} 
+                        onChange={e => setExpensesStartDate(e.target.value)} 
+                        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-rose-500 outline-none" 
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-gray-700">Hasta:</span>
+                      <input 
+                        type="date" 
+                        value={expensesEndDate} 
+                        onChange={e => setExpensesEndDate(e.target.value)} 
+                        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-rose-500 outline-none" 
+                      />
+                    </div>
+                    <div className="ml-auto flex items-center gap-3">
+                      <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">
+                        {filteredExpenses.length} registros
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-500">Total Gastado:</span>
+                        <span className="text-xl font-black text-rose-600">{formatCurrency(totalExpensesRange)}</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
@@ -1091,7 +1267,7 @@
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {expenses.map(e => (
+                          {filteredExpenses.map(e => (
                             <tr key={e.id} className="hover:bg-gray-50/80 transition-colors">
                               <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(e.date)}</td>
                               <td className="px-6 py-4 text-gray-800">{e.description}</td>
@@ -1099,8 +1275,8 @@
                               <td className="px-6 py-4 text-sm text-gray-600 uppercase">{e.registeredBy}</td>
                             </tr>
                           ))}
-                          {expenses.length === 0 && (
-                            <tr><td colSpan="4" className="text-center py-12 text-gray-500">No hay egresos registrados en el historial.</td></tr>
+                          {filteredExpenses.length === 0 && (
+                            <tr><td colSpan="4" className="text-center py-12 text-gray-500">No hay egresos registrados en este rango de fechas.</td></tr>
                           )}
                         </tbody>
                       </table>
@@ -2026,7 +2202,7 @@
                                 onChange={(e) => setPurchaseItemTemp({...purchaseItemTemp, productId: e.target.value})}
                               >
                                 <option value="">- Seleccione producto -</option>
-                                {products.map(p => (
+                                {products.filter(p => !p.isPromotion).map(p => (
                                   <option key={p.id} value={p.id}>{p.name} (Cat: {p.category})</option>
                                 ))}
                               </select>
@@ -2198,7 +2374,7 @@
                           onChange={(e) => setStockForm({...stockForm, productId: e.target.value})}
                         >
                           <option value="">-- Seleccionar Producto --</option>
-                          {products.map(p => (
+                          {products.filter(p => !p.isPromotion).map(p => (
                             <option key={p.id} value={p.id}>{p.name} (Stock: {p.stock})</option>
                           ))}
                         </select>
@@ -2254,22 +2430,63 @@
                     <div className="p-6 border-b border-gray-100 bg-gray-50">
                       <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                         <Package className="text-indigo-600" /> 
-                        {productForm.id ? 'Editar Producto' : 'Nuevo Producto'}
+                        {productForm.id ? 'Editar Producto / Promo' : 'Nuevo Producto / Promo'}
                       </h3>
                     </div>
                     <form onSubmit={handleSaveProduct} className="p-6 space-y-4">
                       
+                      <div className="mb-2">
+                        <label className={`flex items-center gap-2 cursor-pointer p-3 rounded-xl border transition-colors ${productForm.isPromotion ? 'bg-rose-50 border-rose-200' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'}`}>
+                          <input 
+                            type="checkbox" 
+                            className="w-5 h-5 text-rose-600 rounded"
+                            checked={productForm.isPromotion || false}
+                            onChange={(e) => setProductForm({...productForm, isPromotion: e.target.checked})}
+                          />
+                          <span className={`font-bold ${productForm.isPromotion ? 'text-rose-700' : 'text-gray-700'}`}><Gift size={16} className="inline mr-1 -mt-0.5"/>Este artículo es una Promoción (Combo)</span>
+                        </label>
+                      </div>
+
                       <div>
-                        <label className="block text-sm font-bold text-gray-700 mb-1.5">Nombre del Producto</label>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5">Nombre {productForm.isPromotion ? 'de la Promoción' : 'del Producto'}</label>
                         <input 
                           type="text" 
                           required
                           className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium"
                           value={productForm.name}
                           onChange={(e) => setProductForm({...productForm, name: e.target.value})}
-                          placeholder="Ej: Cerveza Cristal 650ml"
+                          placeholder={productForm.isPromotion ? "Ej: 6 Cervezas Pilsen" : "Ej: Cerveza Cristal 650ml"}
                         />
                       </div>
+
+                      {productForm.isPromotion && (
+                        <div className="grid grid-cols-2 gap-4 bg-rose-50 p-4 rounded-xl border border-rose-100">
+                          <div className="col-span-2">
+                            <label className="block text-sm font-bold text-rose-800 mb-1.5">Producto Base a Descontar</label>
+                            <select 
+                              required
+                              className="w-full bg-white border border-rose-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+                              value={productForm.baseProductId || ''}
+                              onChange={(e) => setProductForm({...productForm, baseProductId: e.target.value})}
+                            >
+                              <option value="" disabled>Seleccione producto original...</option>
+                              {products.filter(p => !p.isPromotion).map(p => (
+                                <option key={p.id} value={p.id}>{p.name} (Stock real: {p.stock})</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-span-2">
+                            <label className="block text-sm font-bold text-rose-800 mb-1.5">¿Cuántas unidades se descuentan por venta?</label>
+                            <input 
+                              type="number" min="1" required
+                              className="w-full bg-white border border-rose-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-rose-500 font-medium"
+                              value={productForm.baseQuantity || ''}
+                              onChange={(e) => setProductForm({...productForm, baseQuantity: e.target.value})}
+                              placeholder="Ej: 6"
+                            />
+                          </div>
+                        </div>
+                      )}
 
                       <div className="grid grid-cols-2 gap-4">
                         <div>
@@ -2302,21 +2519,23 @@
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-bold text-gray-700 mb-1.5">Stock Inicial</label>
-                          <input 
-                            type="number" 
-                            min="0"
-                            required={!productForm.id}
-                            disabled={!!productForm.id} 
-                            className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium disabled:bg-gray-100 disabled:text-gray-500"
-                            value={productForm.stock}
-                            onChange={(e) => setProductForm({...productForm, stock: e.target.value})}
-                            placeholder="0"
-                          />
-                          {!!productForm.id && <p className="text-[10px] text-gray-500 mt-1 leading-tight">Para ingresar más stock, usa el módulo "Compras".</p>}
-                        </div>
-                        <div>
+                        {!productForm.isPromotion && (
+                          <div>
+                            <label className="block text-sm font-bold text-gray-700 mb-1.5">Stock Inicial</label>
+                            <input 
+                              type="number" 
+                              min="0"
+                              required={!productForm.id}
+                              disabled={!!productForm.id} 
+                              className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium disabled:bg-gray-100 disabled:text-gray-500"
+                              value={productForm.stock}
+                              onChange={(e) => setProductForm({...productForm, stock: e.target.value})}
+                              placeholder="0"
+                            />
+                            {!!productForm.id && <p className="text-[10px] text-gray-500 mt-1 leading-tight">Para ingresar más stock, usa el módulo "Compras".</p>}
+                          </div>
+                        )}
+                        <div className={productForm.isPromotion ? "col-span-2" : ""}>
                           <label className="block text-sm font-bold text-gray-700 mb-1.5">URL de Imagen</label>
                           <input 
                             type="url" 
@@ -2339,7 +2558,7 @@
                         </button>
                         <button 
                           type="submit"
-                          className="flex-1 py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all"
+                          className={`flex-1 py-3.5 rounded-xl font-bold text-white shadow-lg transition-all ${productForm.isPromotion ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/30' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/30'}`}
                         >
                           {productForm.id ? 'Guardar Cambios' : 'Crear Producto'}
                         </button>
