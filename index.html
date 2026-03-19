@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Punto de Venta SANDUBAI</title>
+    <title>Punto de Venta SANDUABI</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -155,6 +155,8 @@
           const [purchasesEndDate, setPurchasesEndDate] = useState(getTodayStr());
           const [expensesStartDate, setExpensesStartDate] = useState(getTodayStr());
           const [expensesEndDate, setExpensesEndDate] = useState(getTodayStr());
+          const [historyStartDate, setHistoryStartDate] = useState(getTodayStr()); // Nuevo: Filtro Historial
+          const [historyEndDate, setHistoryEndDate] = useState(getTodayStr());     // Nuevo: Filtro Historial
 
           // --- Estados de Sesión Local ---
           const [currentUser, setCurrentUser] = useState(null); 
@@ -302,6 +304,30 @@
               setBoxSession(null);
             }
           }, [activeSessions, currentUser]);
+
+          // --- Exportar Historial a PDF ---
+          const exportHistoryToPDF = () => {
+            const element = document.getElementById('history-report-content');
+            if (!element) return;
+
+            const opt = {
+              margin:       0.4,
+              filename:     `Reporte_Cajas_SANDUABI_${historyStartDate}_al_${historyEndDate}.pdf`,
+              image:        { type: 'jpeg', quality: 0.98 },
+              html2canvas:  { scale: 2, useCORS: true },
+              jsPDF:        { unit: 'in', format: 'a4', orientation: 'landscape' }
+            };
+
+            // Notificamos al usuario que se está generando
+            setDialog({ type: 'alert', message: 'Generando PDF, por favor espera un momento...' });
+            
+            window.html2pdf().set(opt).from(element).save().then(() => {
+              setDialog(null); // Cerramos el diálogo al terminar
+            }).catch(err => {
+              console.error("Error al generar PDF:", err);
+              setDialog({ type: 'alert', message: 'Hubo un problema al generar el PDF.' });
+            });
+          };
 
 
           // --- Lógica de Promociones y Stock Virtual ---
@@ -1399,6 +1425,20 @@
           );
 
           const renderSales = () => {
+            // Lógica de filtrado para el Historial
+            const startObjH = historyStartDate ? new Date(historyStartDate + 'T00:00:00') : new Date('2000-01-01');
+            const endObjH = historyEndDate ? new Date(historyEndDate + 'T23:59:59') : new Date('2100-01-01');
+
+            const filteredReports = boxReports.filter(report => {
+              const d = new Date(report.endTime);
+              return d >= startObjH && d <= endObjH;
+            });
+
+            // Resumen Totales para el Encabezado del Historial
+            const totalEfectivoDecl = filteredReports.reduce((sum, r) => sum + r.efectivoDeclarado, 0);
+            const totalDigital = filteredReports.reduce((sum, r) => sum + r.salesTarjeta + r.salesYape + r.salesPlin, 0);
+            const totalDescuadre = filteredReports.reduce((sum, r) => sum + r.descuadre, 0);
+
             return (
               <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
                 <div className="flex justify-between items-center mb-6">
@@ -1588,64 +1628,145 @@
                   )
                 ) : (
                   // VISTA HISTORIAL DE CAJAS
-                  <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
-                    <div className="overflow-x-auto flex-1 custom-scrollbar">
-                      <table className="w-full text-left border-collapse">
-                        <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0 z-10">
-                          <tr>
-                            <th className="px-6 py-4">Apertura / Cierre</th>
-                            <th className="px-6 py-4 text-center">N° Ventas</th>
-                            <th className="px-6 py-4 text-right">Ingresos Digitales</th>
-                            <th className="px-6 py-4 text-right">Efectivo Sistema</th>
-                            <th className="px-6 py-4 text-right">Ef. Declarado</th>
-                            <th className="px-6 py-4 text-right border-l-2 border-gray-200">Descuadre</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {boxReports.map(report => (
-                            <tr key={report.id} className="hover:bg-gray-50/80 transition-colors">
-                              <td className="px-6 py-4 text-sm text-gray-700 font-medium">
-                                <div className="flex flex-col gap-1">
-                                  <span className="flex items-center gap-1 text-emerald-600"><Unlock size={14}/> {formatDate(new Date(report.startTime))}</span>
-                                  <span className="flex items-center gap-1 text-red-600"><Lock size={14}/> {formatDate(new Date(report.endTime))}</span>
-                                  <span className="text-[10px] text-gray-400 mt-1 uppercase">Cajero: {report.openedBy}</span>
+                  <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+                    {/* Filtros Historial */}
+                    <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-wrap items-center gap-4 flex-shrink-0">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="text-gray-400" size={20} />
+                        <span className="font-bold text-gray-700">Desde:</span>
+                        <input 
+                          type="date" 
+                          value={historyStartDate} 
+                          onChange={e => setHistoryStartDate(e.target.value)} 
+                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-gray-700">Hasta:</span>
+                        <input 
+                          type="date" 
+                          value={historyEndDate} 
+                          onChange={e => setHistoryEndDate(e.target.value)} 
+                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        />
+                      </div>
+                      <div className="ml-auto flex items-center gap-3">
+                        <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">
+                          {filteredReports.length} turnos
+                        </span>
+                        <button 
+                          onClick={exportHistoryToPDF}
+                          className="bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-red-600/20"
+                        >
+                          <FileText size={18} /> Exportar a PDF
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Contenedor del Reporte (Scrollable UI, Expansivo para PDF) */}
+                    <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col relative">
+                      <div className="overflow-y-auto flex-1 custom-scrollbar">
+                        {/* ID que capturará html2pdf */}
+                        <div id="history-report-content" className="w-full bg-white pb-8">
+                          
+                          {/* Cabecera del Documento PDF */}
+                          <div className="p-6 border-b border-gray-200 bg-gray-50/80 mb-4 print:bg-white print:border-b-2 print:border-black">
+                             <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+                               <div className="text-center md:text-left">
+                                 <h3 className="text-2xl font-black text-gray-900 uppercase tracking-wider">SANDUABI Terraza Club</h3>
+                                 <p className="text-gray-500 font-bold">Reporte Consolidado de Turnos y Cajas</p>
+                               </div>
+                               <div className="text-center md:text-right bg-white p-2 rounded-lg border border-gray-200 shadow-sm">
+                                 <p className="text-xs font-bold text-gray-400 uppercase mb-0.5">Período de Reporte</p>
+                                 <p className="text-sm font-black text-indigo-700">{historyStartDate} <span className="text-gray-400 font-medium px-1">al</span> {historyEndDate}</p>
+                               </div>
+                             </div>
+
+                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[10px] font-bold text-gray-400 uppercase">Efectivo Total Recaudado</div>
+                                    <div className="text-xl font-black text-emerald-600">{formatCurrency(totalEfectivoDecl)}</div>
+                                  </div>
+                                  <Banknote className="text-emerald-100" size={32}/>
                                 </div>
-                              </td>
-                              <td className="px-6 py-4 text-center font-bold text-gray-600">{report.totalSalesCount}</td>
-                              <td className="px-6 py-4 text-right">
-                                <div className="flex flex-col items-end gap-1">
-                                  <span className="text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded shadow-sm border border-blue-100 min-w-[100px] text-right">POS: {formatCurrency(report.salesTarjeta)}</span>
-                                  <span className="text-[11px] font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded shadow-sm border border-purple-100 min-w-[100px] text-right">Yape: {formatCurrency(report.salesYape)}</span>
-                                  <span className="text-[11px] font-bold text-cyan-600 bg-cyan-50 px-2 py-0.5 rounded shadow-sm border border-cyan-100 min-w-[100px] text-right">Plin: {formatCurrency(report.salesPlin)}</span>
+                                <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[10px] font-bold text-gray-400 uppercase">Total en Digital (POS/Yape/Plin)</div>
+                                    <div className="text-xl font-black text-indigo-600">{formatCurrency(totalDigital)}</div>
+                                  </div>
+                                  <CreditCard className="text-indigo-100" size={32}/>
                                 </div>
-                              </td>
-                              <td className="px-6 py-4 text-right">
-                                <div className="flex flex-col items-end">
-                                  <span className="font-black text-gray-800">{formatCurrency(report.efectivoEsperado)}</span>
-                                  <span className="text-[10px] text-gray-400 font-bold uppercase">Incluye fondo inicial</span>
+                                <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[10px] font-bold text-gray-400 uppercase">Balance de Descuadre Global</div>
+                                    <div className={`text-xl font-black ${totalDescuadre === 0 ? 'text-gray-600' : totalDescuadre > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                                      {totalDescuadre === 0 ? 'Exacto' : totalDescuadre > 0 ? `+${formatCurrency(totalDescuadre)}` : formatCurrency(totalDescuadre)}
+                                    </div>
+                                  </div>
+                                  <AlertCircle className={totalDescuadre === 0 ? 'text-gray-100' : totalDescuadre > 0 ? 'text-blue-100' : 'text-red-100'} size={32}/>
                                 </div>
-                              </td>
-                              <td className="px-6 py-4 text-right">
-                                <span className="font-black text-gray-800">{formatCurrency(report.efectivoDeclarado)}</span>
-                              </td>
-                              <td className="px-6 py-4 text-right border-l-2 border-gray-200">
-                                <div className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg font-black text-sm shadow-sm border ${
-                                  report.descuadre === 0 
-                                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
-                                    : report.descuadre > 0 
-                                      ? 'bg-blue-50 text-blue-600 border-blue-200' 
-                                      : 'bg-red-50 text-red-600 border-red-200'
-                                }`}>
-                                  {report.descuadre === 0 ? 'CUADRADO' : report.descuadre > 0 ? `SOBRA: ${formatCurrency(report.descuadre)}` : `FALTA: ${formatCurrency(Math.abs(report.descuadre))}`}
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                          {boxReports.length === 0 && (
-                            <tr><td colSpan="6" className="text-center py-16 text-gray-400 font-medium">No hay reportes de cajas de ningún usuario.</td></tr>
-                          )}
-                        </tbody>
-                      </table>
+                             </div>
+                          </div>
+
+                          <table className="w-full text-left border-collapse">
+                            <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold">
+                              <tr>
+                                <th className="px-6 py-3 border-b border-gray-200">Apertura / Cierre</th>
+                                <th className="px-6 py-3 border-b border-gray-200 text-center">Ventas</th>
+                                <th className="px-6 py-3 border-b border-gray-200 text-right">Ingresos Digitales</th>
+                                <th className="px-6 py-3 border-b border-gray-200 text-right">Efectivo Sistema</th>
+                                <th className="px-6 py-3 border-b border-gray-200 text-right bg-amber-50">Ef. Declarado</th>
+                                <th className="px-6 py-3 border-b border-gray-200 text-right">Descuadre</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {filteredReports.map(report => (
+                                <tr key={report.id} className="hover:bg-gray-50/80 transition-colors">
+                                  <td className="px-6 py-4 text-sm text-gray-700 font-medium">
+                                    <div className="flex flex-col gap-1">
+                                      <span className="flex items-center gap-1 text-emerald-600"><Unlock size={14}/> {formatDate(new Date(report.startTime))}</span>
+                                      <span className="flex items-center gap-1 text-red-600"><Lock size={14}/> {formatDate(new Date(report.endTime))}</span>
+                                      <span className="text-[10px] text-gray-400 mt-1 uppercase">Cajero: <span className="font-bold text-gray-600">{report.openedBy}</span></span>
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-4 text-center font-bold text-gray-600">{report.totalSalesCount}</td>
+                                  <td className="px-6 py-4 text-right">
+                                    <div className="flex flex-col items-end gap-1">
+                                      <span className="text-[11px] font-bold text-blue-600">POS: {formatCurrency(report.salesTarjeta)}</span>
+                                      <span className="text-[11px] font-bold text-purple-600">Yape: {formatCurrency(report.salesYape)}</span>
+                                      <span className="text-[11px] font-bold text-cyan-600">Plin: {formatCurrency(report.salesPlin)}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-4 text-right">
+                                    <div className="flex flex-col items-end">
+                                      <span className="font-black text-gray-800">{formatCurrency(report.efectivoEsperado)}</span>
+                                      <span className="text-[9px] text-gray-400 font-bold uppercase mt-0.5">Incl. base {formatCurrency(report.initialCash)}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-4 text-right bg-amber-50/30">
+                                    <span className="font-black text-amber-700 text-lg">{formatCurrency(report.efectivoDeclarado)}</span>
+                                  </td>
+                                  <td className="px-6 py-4 text-right">
+                                    <div className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-black text-xs shadow-sm border ${
+                                      report.descuadre === 0 
+                                        ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                                        : report.descuadre > 0 
+                                          ? 'bg-blue-50 text-blue-600 border-blue-200' 
+                                          : 'bg-red-50 text-red-600 border-red-200'
+                                    }`}>
+                                      {report.descuadre === 0 ? 'CUADRADO' : report.descuadre > 0 ? `+${formatCurrency(report.descuadre)}` : formatCurrency(report.descuadre)}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                              {filteredReports.length === 0 && (
+                                <tr><td colSpan="6" className="text-center py-16 text-gray-400 font-medium">No hay reportes de cajas cerradas en este rango de fechas.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1728,14 +1849,14 @@
                   </div>
                   <img 
                     src="icon-512 (1).png" 
-                    alt="Logo SANDUBAI" 
+                    alt="Logo SANDUABI" 
                     className="w-32 h-32 object-contain rounded-full border-4 border-white/20 shadow-xl mb-6 relative z-10 bg-white"
                     onError={(e) => {
                       e.target.onerror = null;
                       e.target.src = 'https://ui-avatars.com/api/?name=SD&background=4f46e5&color=fff&rounded=true';
                     }}
                   />
-                  <h1 className="text-4xl font-black tracking-wider text-center mb-2 relative z-10">SANDUBAI</h1>
+                  <h1 className="text-4xl font-black tracking-wider text-center mb-2 relative z-10">SANDUABI</h1>
                   <p className="text-indigo-200 font-bold tracking-widest uppercase text-sm relative z-10">Terraza Club</p>
                 </div>
                 <div className="md:w-1/2 p-12 flex flex-col justify-center bg-gray-50 relative">
@@ -1839,7 +1960,7 @@
                   <div className="h-24 flex items-center justify-center lg:justify-start lg:px-6 border-b border-gray-100">
                     <img 
                       src="icon-512 (1).png" 
-                      alt="Logo SANDUBAI Terraza Club" 
+                      alt="Logo SANDUABI Terraza Club" 
                       className="w-14 h-14 object-contain rounded-full border border-gray-100 shadow-sm"
                       onError={(e) => {
                         e.target.onerror = null;
@@ -1847,7 +1968,7 @@
                       }}
                     />
                     <div className="hidden lg:block ml-3 flex flex-col">
-                      <h1 className="font-black text-lg tracking-wider text-gray-900 leading-none">SANDUBAI</h1>
+                      <h1 className="font-black text-lg tracking-wider text-gray-900 leading-none">SANDUABI</h1>
                       <span className="text-[10px] font-bold text-gray-500 tracking-widest uppercase mt-0.5">Terraza Club</span>
                     </div>
                   </div>
@@ -2594,7 +2715,7 @@
               <div className="hidden print:block w-[80mm] bg-white text-black font-mono text-sm p-4 mx-auto">
                 {lastSale && (
                   <>
-                    <div className="text-center font-black text-2xl mb-1">SANDUBAI</div>
+                    <div className="text-center font-black text-2xl mb-1">SANDUABI</div>
                     <div className="text-center font-bold text-sm mb-4">Terraza Club</div>
                     <div className="mb-1">Fecha: {formatDate(new Date(lastSale.date))}</div>
                     <div className="mb-1">Cajero: {lastSale.soldBy}</div>
