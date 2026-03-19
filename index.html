@@ -70,7 +70,8 @@
           AlertCircle, Utensils, Pizza, Martini,
           Users, LogOut, UserCircle, Key, CheckSquare, Square,
           Calendar, PieChart, Download, Printer,
-          Cloud, CloudOff, Activity, ShoppingBag, TrendingDown, Receipt, Gift, ListChecks
+          Cloud, CloudOff, Activity, ShoppingBag, TrendingDown, Receipt, Gift, ListChecks,
+          ClipboardCheck
         } from 'https://esm.sh/lucide-react@0.292.0';
 
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
@@ -139,7 +140,8 @@
         const PAYMENT_METHODS = [
           { id: 'efectivo', name: 'Efectivo', icon: Banknote, color: 'bg-emerald-600' },
           { id: 'tarjeta', name: 'Tarjeta (POS)', icon: CreditCard, color: 'bg-blue-600' },
-          { id: 'yape', name: 'Yape', icon: Smartphone, color: 'bg-purple-600' }
+          { id: 'yape', name: 'Yape', icon: Smartphone, color: 'bg-purple-600' },
+          { id: 'credito', name: 'Crédito', icon: FileText, color: 'bg-orange-600' }
         ];
 
         const DEFAULT_PRODUCT_FORM = { id: null, name: '', category: 'Cervezas', price: '', stock: '', image: '', isPromotion: false, baseProductId: '', baseQuantity: 1 };
@@ -201,6 +203,22 @@
           const [showPurchaseModal, setShowPurchaseModal] = useState(false);
           const [showExpenseModal, setShowExpenseModal] = useState(false);
           
+          // --- Modales para Control de Stock por Barra ---
+          const [showAssignStockModal, setShowAssignStockModal] = useState(false);
+          const [selectedSessionForStock, setSelectedSessionForStock] = useState(null);
+          const [assignStockForm, setAssignStockForm] = useState({ productId: '', quantity: 1 });
+
+          // --- Auditoría de Stock ---
+          const [showAuditModal, setShowAuditModal] = useState(false);
+          const [auditData, setAuditData] = useState({});
+          const [auditSearch, setAuditSearch] = useState('');
+          
+          // --- Créditos ---
+          const [creditCode, setCreditCode] = useState('0000');
+          const [pendingCreditValidation, setPendingCreditValidation] = useState(false);
+          const [inputCreditCode, setInputCreditCode] = useState('');
+          const [showAdminCreditModal, setShowAdminCreditModal] = useState(false);
+
           // Formularios
           const [stockForm, setStockForm] = useState({ productId: '', quantity: 1, reason: 'Compra a proveedor' });
           const [productForm, setProductForm] = useState(DEFAULT_PRODUCT_FORM);
@@ -304,9 +322,13 @@
               setExpenses(items);
             }, console.error);
 
+            const unsubSettingsCredit = onSnapshot(getDocRef('pos_settings', 'credit_auth'), (snap) => {
+              if (snap.exists()) setCreditCode(snap.data().code || '0000');
+            }, console.error);
+
             return () => {
               unsubUsers(); unsubProducts(); unsubSettings(); 
-              unsubSales(); unsubReports(); unsubSessions(); unsubPurchases(); unsubExpenses();
+              unsubSales(); unsubReports(); unsubSessions(); unsubPurchases(); unsubExpenses(); unsubSettingsCredit();
             };
           }, [sysAuthUser]);
 
@@ -394,8 +416,10 @@
               salesEfectivo: 0,
               salesTarjeta: 0,
               salesYape: 0,
+              salesCredito: 0,
               totalSalesCount: 0,
-              openedBy: currentUser.username
+              openedBy: currentUser.username,
+              assignedStock: {} // <- NUEVO: Inicializa el control de stock vacío para este turno
             };
             
             await setDoc(getDocRef('pos_sessions', sessionData.id), sessionData);
@@ -411,18 +435,34 @@
               return;
             }
 
+            // CALCULAR PRODUCTOS VENDIDOS EXACTOS DE ESTE TURNO
+            const sessionSales = sales.filter(s => s.sessionId === boxSession.id);
+            const soldItems = {};
+            sessionSales.forEach(sale => {
+              sale.items.forEach(item => {
+                if (item.isPromotion) {
+                  // Si es combo, convertir a su producto base para el cuadre
+                  const bId = item.baseProductId;
+                  soldItems[bId] = (soldItems[bId] || 0) + (item.quantity * item.baseQuantity);
+                } else {
+                  soldItems[item.id] = (soldItems[item.id] || 0) + item.quantity;
+                }
+              });
+            });
+
             const efectivoEsperado = boxSession.initialCash + boxSession.salesEfectivo;
             const declaredCash = efectivoEsperado; // Auto-cuadre, no pedimos monto físico
 
             const report = {
               ...boxSession,
               endTime: new Date(),
-              totalVentas: boxSession.salesEfectivo + boxSession.salesTarjeta + boxSession.salesYape,
+              totalVentas: boxSession.salesEfectivo + boxSession.salesTarjeta + boxSession.salesYape + (boxSession.salesCredito || 0),
               efectivoEsperado: efectivoEsperado,
               efectivoDeclarado: declaredCash,
               descuadre: declaredCash - efectivoEsperado,
               closedBy: currentUser.username,
-              closedByName: currentUser.name
+              closedByName: currentUser.name,
+              soldItems: soldItems // Guardamos el consolidado de lo vendido para el control
             };
             
             const reportId = Math.random().toString(36).substr(2, 9);
@@ -441,6 +481,41 @@
             setLastSale(null);
             setLastCloseReport(report);
             setTimeout(() => { window.print(); }, 500);
+          };
+
+          // --- Funciones para Asignar Stock de Control (Solo Admin) ---
+          const handleAddAssignedStock = async (e) => {
+            e.preventDefault();
+            if (!selectedSessionForStock || !assignStockForm.productId) return;
+            const pId = assignStockForm.productId;
+            const qty = parseInt(assignStockForm.quantity);
+            
+            const currentStock = selectedSessionForStock.assignedStock || {};
+            const newStock = { ...currentStock, [pId]: (currentStock[pId] || 0) + qty };
+            
+            const updatedSession = { ...selectedSessionForStock, assignedStock: newStock };
+            
+            await setDoc(getDocRef('pos_sessions', selectedSessionForStock.id), {
+              ...updatedSession,
+              startTime: typeof updatedSession.startTime === 'string' ? updatedSession.startTime : updatedSession.startTime.toISOString()
+            });
+            
+            setSelectedSessionForStock(updatedSession);
+            setAssignStockForm({ productId: '', quantity: 1 });
+          };
+
+          const handleRemoveAssignedStock = async (pId) => {
+            const currentStock = { ...selectedSessionForStock.assignedStock };
+            delete currentStock[pId];
+            
+            const updatedSession = { ...selectedSessionForStock, assignedStock: currentStock };
+            
+            await setDoc(getDocRef('pos_sessions', selectedSessionForStock.id), {
+              ...updatedSession,
+              startTime: typeof updatedSession.startTime === 'string' ? updatedSession.startTime : updatedSession.startTime.toISOString()
+            });
+            
+            setSelectedSessionForStock(updatedSession);
           };
 
           // --- Funciones del Carrito y Ventas ---
@@ -480,6 +555,16 @@
 
           const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
+          const processCreditCheckout = () => {
+            if (inputCreditCode !== creditCode) {
+              setDialog({ type: 'alert', message: 'Código de autorización incorrecto.' });
+              return;
+            }
+            setPendingCreditValidation(false);
+            setInputCreditCode('');
+            handleCheckout('credito');
+          };
+
           const handleCheckout = async (paymentMethodId) => {
             if (cart.length === 0 || !boxSession) return;
 
@@ -504,6 +589,7 @@
               }
             }
 
+            // Descuenta del Inventario General Global
             for (const [pId, deductQty] of Object.entries(stockDeductions)) {
               const dbProduct = products.find(p => p.id === parseInt(pId));
               const newStock = dbProduct.stock - deductQty;
@@ -526,12 +612,13 @@
               salesEfectivo: boxSession.salesEfectivo + (paymentMethodId === 'efectivo' ? cartTotal : 0),
               salesTarjeta: boxSession.salesTarjeta + (paymentMethodId === 'tarjeta' ? cartTotal : 0),
               salesYape: boxSession.salesYape + (paymentMethodId === 'yape' ? cartTotal : 0),
+              salesCredito: (boxSession.salesCredito || 0) + (paymentMethodId === 'credito' ? cartTotal : 0),
               totalSalesCount: boxSession.totalSalesCount + 1
             };
             
             await setDoc(getDocRef('pos_sessions', boxSession.id), {
               ...updatedSession,
-              startTime: updatedSession.startTime.toISOString()
+              startTime: typeof updatedSession.startTime === 'string' ? updatedSession.startTime : updatedSession.startTime.toISOString()
             });
 
             setLastCloseReport(null);
@@ -702,6 +789,45 @@
             const newStock = product.stock + qty;
             await setDoc(getDocRef('pos_products', productId.toString()), { ...product, stock: newStock });
             setShowStockModal(false); setStockForm({ productId: '', quantity: 1, reason: 'Ajuste manual' });
+          };
+
+          // --- Funciones de Auditoría de Stock ---
+          const handleOpenAudit = () => {
+            const initialAudit = {};
+            products.filter(p => !p.isPromotion).forEach(p => {
+              initialAudit[p.id] = p.stock;
+            });
+            setAuditData(initialAudit);
+            setAuditSearch('');
+            setShowAuditModal(true);
+          };
+
+          const handleSaveAudit = () => {
+            setDialog({
+              type: 'confirm',
+              message: '¿Estás seguro de aplicar estos ajustes? El stock del sistema se actualizará con los valores físicos ingresados.',
+              onConfirm: async () => {
+                try {
+                  const updatePromises = [];
+                  for (const p of products) {
+                    if (p.isPromotion) continue;
+                    const newStock = parseInt(auditData[p.id]);
+                    if (isNaN(newStock) || newStock < 0) continue;
+                    if (newStock !== p.stock) {
+                       updatePromises.push(
+                         setDoc(getDocRef('pos_products', p.id.toString()), { ...p, stock: newStock })
+                       );
+                    }
+                  }
+                  await Promise.all(updatePromises);
+                  setShowAuditModal(false);
+                  setDialog({ type: 'alert', message: 'Inventario y stock sincronizados con éxito.' });
+                } catch (error) {
+                  console.error("Error al guardar auditoría:", error);
+                  setDialog({ type: 'alert', message: 'Hubo un error al actualizar el stock.' });
+                }
+              }
+            });
           };
 
           const formatCurrency = (amount) => `S/ ${amount.toFixed(2)}`;
@@ -898,8 +1024,11 @@
                   <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><Package className="text-indigo-600" /> Inventario y Productos</h2>
                   <div className="flex gap-3">
                     {currentUser?.role === 'admin' && (
-                      <><button onClick={() => setShowCategoryModal(true)} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"><Tags size={18} /> Categorías</button>
-                      <button onClick={() => handleOpenProductModal()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20"><Plus size={18} /> Nuevo Producto / Promo</button></>
+                      <>
+                      <button onClick={handleOpenAudit} className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-amber-500/20"><ClipboardCheck size={18} /> Auditoría de Stock</button>
+                      <button onClick={() => setShowCategoryModal(true)} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"><Tags size={18} /> Categorías</button>
+                      <button onClick={() => handleOpenProductModal()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20"><Plus size={18} /> Nuevo Producto / Promo</button>
+                      </>
                     )}
                     <button onClick={() => setShowStockModal(true)} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm" title="Solo para cuadrar diferencias. Usa el módulo Compras para ingresos reales."><Edit2 size={18} /> Ajuste de Stock</button>
                   </div>
@@ -969,6 +1098,7 @@
             const ventasEfectivo = filteredSales.filter(s => s.paymentMethod === 'efectivo').reduce((sum, s) => sum + s.total, 0);
             const ventasTarjeta = filteredSales.filter(s => s.paymentMethod === 'tarjeta').reduce((sum, s) => sum + s.total, 0);
             const ventasYape = filteredSales.filter(s => s.paymentMethod === 'yape').reduce((sum, s) => sum + s.total, 0);
+            const ventasCredito = filteredSales.filter(s => s.paymentMethod === 'credito').reduce((sum, s) => sum + s.total, 0);
 
             // 2. Cálculos de Productos Vendidos por Categoría
             const salesBreakdown = {};
@@ -1063,10 +1193,22 @@
                                       <div className="text-[10px] font-bold text-purple-400 uppercase mb-1">Yape</div>
                                       <div className="font-bold text-purple-600">{formatCurrency(session.salesYape || 0)}</div>
                                     </div>
+                                    <div className="bg-white p-3 rounded-xl border border-orange-100 shadow-sm">
+                                      <div className="text-[10px] font-bold text-orange-400 uppercase mb-1">Créditos</div>
+                                      <div className="font-bold text-orange-600">{formatCurrency(session.salesCredito || 0)}</div>
+                                    </div>
                                   </div>
                                   <div className="flex justify-between items-center text-sm border-t border-gray-200 pt-3">
-                                    <span className="font-bold text-gray-500">Total Transacciones: {session.totalSalesCount}</span>
-                                    <span className="font-black text-gray-800">Total Venta: {formatCurrency(totalVendido)}</span>
+                                    <button 
+                                      onClick={() => { setSelectedSessionForStock(session); setShowAssignStockModal(true); }}
+                                      className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-1 border border-indigo-100 shadow-sm active:scale-95"
+                                    >
+                                      <ClipboardList size={14} /> Control de Barra
+                                    </button>
+                                    <div className="text-right">
+                                      <span className="font-bold text-gray-500 block text-[10px] uppercase">Total Venta</span>
+                                      <span className="font-black text-gray-800 text-lg leading-none">{formatCurrency(totalVendido)}</span>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -1080,12 +1222,13 @@
                     <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                       {boxSession ? (
                         <>
-                          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
                             <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-col"><span className="text-gray-500 text-sm font-bold mb-1">Monto Inicial (Caja)</span><span className="text-2xl font-black text-gray-800">{formatCurrency(boxSession.initialCash)}</span></div>
                             <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-col"><span className="text-gray-500 text-sm font-bold mb-1">Ventas en Efectivo</span><span className="text-2xl font-black text-emerald-600">{formatCurrency(boxSession.salesEfectivo)}</span></div>
-                            <div className="bg-indigo-600 p-4 rounded-2xl border border-indigo-700 shadow-sm flex flex-col text-white relative overflow-hidden"><div className="absolute -right-4 -bottom-4 opacity-20"><Wallet size={80} /></div><span className="text-indigo-100 text-sm font-bold mb-1">Efectivo Total en Caja</span><span className="text-2xl font-black">{formatCurrency(boxSession.initialCash + boxSession.salesEfectivo)}</span></div>
                             <div className="bg-white p-4 rounded-2xl border border-blue-200 shadow-sm flex flex-col"><span className="text-gray-500 text-sm font-bold mb-1 flex items-center gap-1"><CreditCard size={16} className="text-blue-600"/> Tarjeta (POS)</span><span className="text-2xl font-black text-blue-600">{formatCurrency(boxSession.salesTarjeta)}</span></div>
                             <div className="bg-white p-4 rounded-2xl border border-purple-200 shadow-sm flex flex-col"><span className="text-gray-500 text-sm font-bold mb-1 flex items-center gap-1"><Smartphone size={16} className="text-purple-600"/> Yape</span><span className="text-2xl font-black text-purple-600">{formatCurrency(boxSession.salesYape)}</span></div>
+                            <div className="bg-white p-4 rounded-2xl border border-orange-200 shadow-sm flex flex-col"><span className="text-gray-500 text-sm font-bold mb-1 flex items-center gap-1"><FileText size={16} className="text-orange-600"/> Créditos</span><span className="text-2xl font-black text-orange-600">{formatCurrency(boxSession.salesCredito || 0)}</span></div>
+                            <div className="bg-indigo-600 p-4 rounded-2xl border border-indigo-700 shadow-sm flex flex-col text-white relative overflow-hidden xl:col-span-5"><div className="absolute -right-4 -bottom-4 opacity-20"><Wallet size={80} /></div><span className="text-indigo-100 text-sm font-bold mb-1">Efectivo Total en Caja</span><span className="text-2xl font-black">{formatCurrency(boxSession.initialCash + boxSession.salesEfectivo)}</span></div>
                           </div>
                           <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col relative">
                             <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
@@ -1176,7 +1319,7 @@
                           {/* SECCIÓN 1: Resumen General de Ventas */}
                           <div className="mb-8 avoid-page-break">
                             <h4 className="font-bold text-gray-800 uppercase border-b-2 border-gray-800 pb-2 mb-4 flex items-center gap-2"><PieChart size={18}/> Resumen General de Ingresos</h4>
-                            <div className="grid grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                                <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl text-center">
                                  <Banknote className="mx-auto text-emerald-600 mb-2" size={24}/>
                                  <div className="text-xs font-bold text-gray-500 uppercase mb-1">Efectivo</div>
@@ -1191,6 +1334,11 @@
                                  <Smartphone className="mx-auto text-purple-600 mb-2" size={24}/>
                                  <div className="text-xs font-bold text-gray-500 uppercase mb-1">Yape</div>
                                  <div className="text-lg font-black text-purple-700">{formatCurrency(ventasYape)}</div>
+                               </div>
+                               <div className="bg-orange-50 border border-orange-100 p-4 rounded-xl text-center">
+                                 <FileText className="mx-auto text-orange-600 mb-2" size={24}/>
+                                 <div className="text-xs font-bold text-gray-500 uppercase mb-1">Créditos</div>
+                                 <div className="text-lg font-black text-orange-700">{formatCurrency(ventasCredito)}</div>
                                </div>
                                <div className="bg-gray-900 border border-gray-800 p-4 rounded-xl text-center shadow-md">
                                  <Activity className="mx-auto text-white mb-2" size={24}/>
@@ -1576,6 +1724,16 @@
                       <LogOut size={18} />
                       <span className="hidden lg:inline">Cerrar Sesión</span>
                     </button>
+
+                    {currentUser.role === 'admin' && (
+                       <button
+                         onClick={() => setShowAdminCreditModal(true)}
+                         className="w-full flex items-center justify-center gap-2 p-3 rounded-xl text-orange-600 bg-orange-50 hover:bg-orange-100 transition-colors font-bold border border-orange-200 mt-2"
+                       >
+                         <Key size={18} />
+                         <span className="hidden lg:inline">Código Crédito</span>
+                       </button>
+                    )}
                   </div>
                 </div>
 
@@ -1598,22 +1756,52 @@
                         <h3 className="text-lg font-bold text-gray-500 mb-2 uppercase tracking-wide">Total a Cobrar</h3>
                         <div className="text-5xl font-black text-gray-900">{formatCurrency(cartTotal)}</div>
                       </div>
-                      <div className="p-8">
-                        <p className="text-gray-500 mb-6 text-center text-sm font-semibold">Selecciona el método de pago</p>
-                        <div className="grid grid-cols-2 gap-4">
-                          {PAYMENT_METHODS.map(method => {
-                            const Icon = method.icon;
-                            return (
-                              <button key={method.id} onClick={() => handleCheckout(method.id)} className={`${method.color} hover:brightness-110 text-white p-5 rounded-2xl flex flex-col items-center justify-center gap-3 transition-all active:scale-95 shadow-md`}>
-                                <Icon size={32} /><span className="font-bold">{method.name}</span>
-                              </button>
-                            )
-                          })}
+                      
+                      {pendingCreditValidation ? (
+                        <div className="p-8">
+                          <h4 className="font-bold text-gray-800 mb-2 text-center">Código de Autorización</h4>
+                          <p className="text-sm text-gray-500 mb-6 text-center">Ingresa el código proporcionado por el administrador para procesar la venta a crédito.</p>
+                          <input 
+                            type="password" 
+                            className="w-full border-2 border-gray-300 rounded-xl p-3 text-center text-3xl tracking-[0.5em] font-black focus:ring-2 focus:ring-orange-500 focus:outline-none focus:border-orange-500" 
+                            value={inputCreditCode} 
+                            onChange={e => setInputCreditCode(e.target.value)} 
+                            autoFocus
+                            placeholder="****"
+                          />
+                          <div className="flex gap-3 mt-6">
+                            <button onClick={() => { setPendingCreditValidation(false); setInputCreditCode(''); }} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200">Cancelar</button>
+                            <button onClick={() => processCreditCheckout()} className="flex-1 py-3 bg-orange-600 text-white rounded-xl font-bold shadow-lg shadow-orange-600/30 hover:bg-orange-700">Validar</button>
+                          </div>
                         </div>
-                      </div>
-                      <div className="p-4 bg-gray-50">
-                        <button onClick={() => setShowPaymentModal(false)} className="w-full py-3.5 rounded-xl font-bold text-gray-600 hover:bg-gray-200 transition-colors">Cancelar</button>
-                      </div>
+                      ) : (
+                        <div className="p-8">
+                          <p className="text-gray-500 mb-6 text-center text-sm font-semibold">Selecciona el método de pago</p>
+                          <div className="grid grid-cols-2 gap-4">
+                            {PAYMENT_METHODS.map(method => {
+                              const Icon = method.icon;
+                              return (
+                                <button 
+                                  key={method.id} 
+                                  onClick={() => {
+                                    if (method.id === 'credito') setPendingCreditValidation(true);
+                                    else handleCheckout(method.id);
+                                  }} 
+                                  className={`${method.color} hover:brightness-110 text-white p-5 rounded-2xl flex flex-col items-center justify-center gap-3 transition-all active:scale-95 shadow-md`}
+                                >
+                                  <Icon size={32} /><span className="font-bold">{method.name}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {!pendingCreditValidation && (
+                        <div className="p-4 bg-gray-50">
+                          <button onClick={() => setShowPaymentModal(false)} className="w-full py-3.5 rounded-xl font-bold text-gray-600 hover:bg-gray-200 transition-colors">Cancelar</button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1784,6 +1972,139 @@
                   </div>
                 )}
 
+                {/* Modal Auditoría de Stock */}
+                {showAuditModal && (
+                  <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+                      <div className="p-6 border-b border-gray-100 bg-amber-50 flex justify-between items-center">
+                        <div>
+                          <h3 className="text-xl font-bold text-amber-900 flex items-center gap-2">
+                            <ClipboardCheck className="text-amber-600" /> Toma de Inventario Físico
+                          </h3>
+                          <p className="text-xs text-amber-700 mt-1 font-bold">Compara el stock del sistema con tu conteo real y aplica las diferencias.</p>
+                        </div>
+                        <div className="relative w-64">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                          <input type="text" placeholder="Buscar producto..." className="w-full bg-white border border-amber-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" value={auditSearch} onChange={e => setAuditSearch(e.target.value)} />
+                        </div>
+                      </div>
+                      
+                      <div className="flex-1 overflow-y-auto custom-scrollbar p-0 bg-gray-50">
+                        <table className="w-full text-left border-collapse">
+                          <thead className="bg-white text-gray-500 text-xs uppercase font-bold sticky top-0 shadow-sm z-10">
+                            <tr>
+                              <th className="px-6 py-4">Producto</th>
+                              <th className="px-6 py-4">Categoría</th>
+                              <th className="px-6 py-4 text-center">Stock Sistema</th>
+                              <th className="px-6 py-4 text-center">Stock Físico (Real)</th>
+                              <th className="px-6 py-4 text-center">Diferencia</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {products.filter(p => !p.isPromotion && p.name.toLowerCase().includes(auditSearch.toLowerCase())).map(p => {
+                              const sysStock = p.stock;
+                              const physStock = parseInt(auditData[p.id]) || 0;
+                              const diff = physStock - sysStock;
+                              const isDiff = diff !== 0;
+                              
+                              return (
+                                <tr key={p.id} className={`hover:bg-amber-50/30 transition-colors ${isDiff ? 'bg-amber-50/10' : 'bg-white'}`}>
+                                  <td className="px-6 py-3 font-bold text-gray-800">{p.name}</td>
+                                  <td className="px-6 py-3"><span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-md font-medium">{p.category}</span></td>
+                                  <td className="px-6 py-3 text-center font-black text-gray-500 text-lg">{sysStock}</td>
+                                  <td className="px-6 py-3 text-center">
+                                    <input 
+                                      type="number" 
+                                      min="0"
+                                      className={`w-24 text-center border-2 rounded-lg py-1.5 font-bold text-lg focus:outline-none focus:ring-2 focus:ring-amber-500 transition-colors ${isDiff ? 'border-amber-400 text-amber-700 bg-amber-50' : 'border-gray-200 text-gray-800'}`}
+                                      value={auditData[p.id] !== undefined ? auditData[p.id] : ''}
+                                      onChange={e => setAuditData({...auditData, [p.id]: e.target.value})}
+                                    />
+                                  </td>
+                                  <td className="px-6 py-3 text-center">
+                                    <span className={`inline-flex items-center justify-center min-w-[3rem] px-2 py-1 rounded-lg font-black text-sm ${diff === 0 ? 'bg-gray-100 text-gray-400' : diff > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                      {diff > 0 ? `+${diff}` : diff}
+                                    </span>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      
+                      <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center gap-4 shadow-[0_-4px_6px_-1px_rgb(0,0,0,0.05)]">
+                         <div className="text-sm text-gray-500 font-medium">
+                           Total de productos a auditar: <span className="font-bold text-gray-800">{products.filter(p => !p.isPromotion).length}</span>
+                         </div>
+                         <div className="flex gap-3">
+                           <button onClick={() => setShowAuditModal(false)} className="px-6 py-3.5 rounded-xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors">Cancelar</button>
+                           <button onClick={handleSaveAudit} className="px-6 py-3.5 rounded-xl font-bold text-white bg-amber-500 hover:bg-amber-600 shadow-lg shadow-amber-500/30 transition-all flex items-center gap-2">
+                             <ClipboardCheck size={20} /> Aplicar Ajustes
+                           </button>
+                         </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Modal Asignar Stock por Sesión (Solo Admin) */}
+                {showAssignStockModal && selectedSessionForStock && (
+                  <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+                      <div className="p-6 border-b border-gray-100 bg-indigo-50">
+                        <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                          <ClipboardList className="text-indigo-600" /> Control de Barra: {selectedSessionForStock.openedBy}
+                        </h3>
+                        <p className="text-xs text-indigo-600 mt-1 font-bold uppercase">Este control no afecta el inventario general.</p>
+                      </div>
+                      
+                      <div className="p-6 flex-1 overflow-y-auto custom-scrollbar">
+                        <form onSubmit={handleAddAssignedStock} className="flex gap-2 mb-6 items-end bg-gray-50 p-3 rounded-xl border border-gray-200">
+                          <div className="flex-1">
+                            <label className="block text-xs font-bold text-gray-700 mb-1">Producto</label>
+                            <select required className="w-full border border-gray-300 rounded-xl p-2.5 text-sm" value={assignStockForm.productId} onChange={e => setAssignStockForm({...assignStockForm, productId: e.target.value})}>
+                              <option value="">Seleccionar...</option>
+                              {products.filter(p => !p.isPromotion).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="w-20">
+                            <label className="block text-xs font-bold text-gray-700 mb-1">Cant.</label>
+                            <input type="number" min="1" required className="w-full border border-gray-300 rounded-xl p-2.5 text-sm font-bold text-indigo-700" value={assignStockForm.quantity} onChange={e => setAssignStockForm({...assignStockForm, quantity: e.target.value})} />
+                          </div>
+                          <button type="submit" className="bg-indigo-600 text-white p-2.5 rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"><Plus size={20}/></button>
+                        </form>
+
+                        <div>
+                          <h4 className="font-bold text-gray-800 text-sm mb-3">Stock Físico Entregado</h4>
+                          {(!selectedSessionForStock.assignedStock || Object.keys(selectedSessionForStock.assignedStock).length === 0) ? (
+                            <div className="text-sm text-gray-400 font-medium text-center py-6 border border-dashed border-gray-200 rounded-xl">No has asignado mercadería a esta barra.</div>
+                          ) : (
+                            <div className="space-y-2">
+                              {Object.entries(selectedSessionForStock.assignedStock).map(([pId, qty]) => {
+                                const prod = products.find(p => p.id === parseInt(pId));
+                                if (!prod) return null;
+                                return (
+                                  <div key={pId} className="flex justify-between items-center p-3 bg-white border border-gray-200 rounded-xl shadow-sm">
+                                    <span className="font-bold text-gray-700 text-sm flex-1">{prod.name}</span>
+                                    <div className="flex items-center gap-4">
+                                      <span className="font-black text-indigo-600 bg-indigo-50 px-3 py-1 rounded-lg">{qty} und</span>
+                                      <button type="button" onClick={() => handleRemoveAssignedStock(pId)} className="text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="p-4 bg-gray-50 border-t border-gray-100">
+                         <button onClick={() => setShowAssignStockModal(false)} className="w-full py-3.5 rounded-xl font-bold text-gray-600 bg-gray-200 hover:bg-gray-300 transition-colors">Terminar de Asignar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Modal Cierre de Caja */}
                 {showCloseBoxModal && boxSession && (
                   <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -1841,6 +2162,36 @@
                   </div>
                 )}
 
+                {/* Modal Admin Generar Código de Crédito */}
+                {showAdminCreditModal && (
+                  <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-white border border-gray-200 rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl">
+                      <div className="p-6 border-b border-gray-100 bg-orange-50 flex items-center gap-2 text-orange-700">
+                         <Key size={24} /> <h3 className="text-xl font-bold">Autorización de Créditos</h3>
+                      </div>
+                      <div className="p-6 bg-white text-center">
+                        <p className="text-sm text-gray-500 font-medium mb-4">Código actual para permitir ventas a crédito en el sistema:</p>
+                        <div className="text-5xl font-black text-orange-600 tracking-widest my-6 border-2 border-dashed border-orange-200 rounded-xl py-4 bg-orange-50">
+                          {creditCode}
+                        </div>
+                        <button 
+                          onClick={async () => {
+                            const newCode = Math.floor(1000 + Math.random() * 9000).toString();
+                            await setDoc(getDocRef('pos_settings', 'credit_auth'), { code: newCode });
+                            setDialog({ type: 'alert', message: `Nuevo código generado correctamente: ${newCode}` });
+                          }} 
+                          className="w-full py-3.5 rounded-xl font-bold text-white bg-orange-600 hover:bg-orange-700 shadow-lg shadow-orange-600/30 transition-all mb-3"
+                        >
+                          Generar Nuevo Código
+                        </button>
+                      </div>
+                      <div className="p-4 bg-gray-50 border-t border-gray-100">
+                        <button onClick={() => setShowAdminCreditModal(false)} className="w-full py-3.5 rounded-xl font-bold text-gray-600 bg-gray-200 hover:bg-gray-300">Cerrar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Alertas */}
                 {dialog && (
                   <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
@@ -1893,7 +2244,7 @@
                     <div className="flex justify-between mb-1"><span>Efectivo:</span><span>S/ {lastCloseReport.salesEfectivo.toFixed(2)}</span></div>
                     <div className="flex justify-between mb-1"><span>Tarjeta:</span><span>S/ {lastCloseReport.salesTarjeta.toFixed(2)}</span></div>
                     <div className="flex justify-between mb-1"><span>Yape:</span><span>S/ {lastCloseReport.salesYape.toFixed(2)}</span></div>
-                    <div className="flex justify-between mb-3"><span>Transferencia:</span><span>S/ 0.00</span></div>
+                    <div className="flex justify-between mb-3"><span>Créditos:</span><span>S/ {(lastCloseReport.salesCredito || 0).toFixed(2)}</span></div>
                     
                     <div className="border-b border-black border-dashed mb-2"></div>
                     
@@ -1901,7 +2252,42 @@
                     <div className="flex justify-between mb-1 font-bold"><span>Descuentos:</span><span>S/ 0.00</span></div>
                     <div className="flex justify-between font-black text-xl mt-3 mb-6"><span>TOTAL:</span><span>S/ {lastCloseReport.totalVentas.toFixed(2)}</span></div>
                     
-                    <div className="border-b border-black border-dashed mb-8"></div>
+                    {/* ZONA DE CONTROL DE BARRA (Solo se imprime si hubo stock asignado) */}
+                    {lastCloseReport.assignedStock && Object.keys(lastCloseReport.assignedStock).length > 0 && (
+                      <>
+                        <div className="border-b border-black border-dashed mb-2 mt-4"></div>
+                        <div className="font-bold text-center mb-2">CONTROL DE BARRA</div>
+                        <div className="border-b border-black border-dashed mb-2"></div>
+                        <table className="w-full text-left mb-6 text-[10px]">
+                          <thead>
+                            <tr>
+                              <th className="pb-1">Producto</th>
+                              <th className="pb-1 text-center">Asig.</th>
+                              <th className="pb-1 text-center">Vend.</th>
+                              <th className="pb-1 text-right">Queda</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(lastCloseReport.assignedStock).map(([pId, assignedQty]) => {
+                              const prod = products.find(p => p.id === parseInt(pId));
+                              if (!prod) return null;
+                              const soldQty = lastCloseReport.soldItems?.[pId] || 0;
+                              const expectedQty = assignedQty - soldQty;
+                              return (
+                                <tr key={pId}>
+                                  <td className="py-0.5 pr-1 truncate max-w-[80px]">{prod.name}</td>
+                                  <td className="py-0.5 text-center">{assignedQty}</td>
+                                  <td className="py-0.5 text-center">{soldQty}</td>
+                                  <td className="py-0.5 text-right font-bold">{expectedQty}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+
+                    <div className="border-b border-black border-dashed mb-8 mt-2"></div>
                     
                     <div className="text-center">
                       <div className="border-t border-black w-48 mx-auto pt-1 font-bold text-sm">Firma Responsable</div>
