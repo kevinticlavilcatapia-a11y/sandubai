@@ -36,6 +36,23 @@
             page-break-inside: avoid;
             break-inside: avoid;
         }
+        
+        /* Optimizaciones para Impresión Térmica Directa */
+        @media print {
+            @page {
+                margin: 0; /* Elimina márgenes para que no salgan los links y fechas del navegador */
+                size: 80mm auto; /* Fuerza el tamaño de ticketera 80mm */
+            }
+            body {
+                margin: 0;
+            }
+            /* Asegura que los negros se impriman fuertes */
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                color: #000 !important;
+            }
+        }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-900 font-sans selection:bg-indigo-100 selection:text-indigo-900">
