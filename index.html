@@ -211,11 +211,13 @@
           const [auditData, setAuditData] = useState({});
           const [auditSearch, setAuditSearch] = useState('');
           
-          // --- Créditos ---
+          // --- Créditos y Pagos Divididos ---
           const [creditCode, setCreditCode] = useState('0000');
           const [pendingCreditValidation, setPendingCreditValidation] = useState(false);
           const [inputCreditCode, setInputCreditCode] = useState('');
           const [showAdminCreditModal, setShowAdminCreditModal] = useState(false);
+          const [isSplitPayment, setIsSplitPayment] = useState(false);
+          const [splitAmounts, setSplitAmounts] = useState({ efectivo: '', tarjeta: '', yape: '', credito: '' });
 
           // Formularios
           const [stockForm, setStockForm] = useState({ productId: '', quantity: 1, reason: 'Compra a proveedor' });
@@ -417,7 +419,7 @@
               salesCredito: 0,
               totalSalesCount: 0,
               openedBy: currentUser.username,
-              assignedStock: {} // <- NUEVO: Inicializa el control de stock vacío para este turno
+              assignedStock: {} // Inicializa el control de stock vacío para este turno
             };
             
             await setDoc(getDocRef('pos_sessions', sessionData.id), sessionData);
@@ -560,10 +562,14 @@
             }
             setPendingCreditValidation(false);
             setInputCreditCode('');
-            handleCheckout('credito');
+            if (isSplitPayment) {
+              handleCheckout('dividido', splitAmounts);
+            } else {
+              handleCheckout('credito');
+            }
           };
 
-          const handleCheckout = async (paymentMethodId) => {
+          const handleCheckout = async (paymentMethodId, splitData = null) => {
             if (cart.length === 0 || !boxSession) return;
 
             const saleId = Math.random().toString(36).substr(2, 9);
@@ -594,6 +600,19 @@
               await setDoc(getDocRef('pos_products', dbProduct.id.toString()), { ...dbProduct, stock: newStock });
             }
 
+            let amtEfectivo = 0, amtTarjeta = 0, amtYape = 0, amtCredito = 0;
+            if (paymentMethodId === 'dividido' && splitData) {
+              amtEfectivo = parseFloat(splitData.efectivo) || 0;
+              amtTarjeta = parseFloat(splitData.tarjeta) || 0;
+              amtYape = parseFloat(splitData.yape) || 0;
+              amtCredito = parseFloat(splitData.credito) || 0;
+            } else {
+              if (paymentMethodId === 'efectivo') amtEfectivo = cartTotal;
+              if (paymentMethodId === 'tarjeta') amtTarjeta = cartTotal;
+              if (paymentMethodId === 'yape') amtYape = cartTotal;
+              if (paymentMethodId === 'credito') amtCredito = cartTotal;
+            }
+
             const newSale = {
               id: saleId,
               sessionId: boxSession.id,
@@ -601,16 +620,17 @@
               items: [...cart],
               total: cartTotal,
               paymentMethod: paymentMethodId,
+              splitAmounts: paymentMethodId === 'dividido' ? { efectivo: amtEfectivo, tarjeta: amtTarjeta, yape: amtYape, credito: amtCredito } : null,
               soldBy: currentUser.username
             };
             await setDoc(getDocRef('pos_sales', saleId), newSale);
 
             const updatedSession = {
               ...boxSession,
-              salesEfectivo: boxSession.salesEfectivo + (paymentMethodId === 'efectivo' ? cartTotal : 0),
-              salesTarjeta: boxSession.salesTarjeta + (paymentMethodId === 'tarjeta' ? cartTotal : 0),
-              salesYape: boxSession.salesYape + (paymentMethodId === 'yape' ? cartTotal : 0),
-              salesCredito: (boxSession.salesCredito || 0) + (paymentMethodId === 'credito' ? cartTotal : 0),
+              salesEfectivo: boxSession.salesEfectivo + amtEfectivo,
+              salesTarjeta: boxSession.salesTarjeta + amtTarjeta,
+              salesYape: boxSession.salesYape + amtYape,
+              salesCredito: (boxSession.salesCredito || 0) + amtCredito,
               totalSalesCount: boxSession.totalSalesCount + 1
             };
             
@@ -623,6 +643,8 @@
             setLastSale(newSale);
             setCart([]);
             setShowPaymentModal(false);
+            setIsSplitPayment(false);
+            setSplitAmounts({ efectivo: '', tarjeta: '', yape: '', credito: '' });
 
             // Ahora imprime el ticket SIEMPRE, para cualquier método de pago
             setTimeout(() => { window.print(); }, 500);
@@ -689,7 +711,6 @@
           };
 
           // --- Funciones de Categorías, Usuarios, Productos ... ---
-          // ... (Omito las funciones repetidas por brevedad de lectura, pero se mantienen intactas en la ejecución real) ...
           const handleAddCategory = async (e) => {
             e.preventDefault();
             if (newCategoryName.trim() && !categories.includes(newCategoryName.trim())) {
@@ -1003,11 +1024,15 @@
                         <Banknote size={24} /> Cobro Rápido (Efectivo)
                       </button>
                       <button 
-                        onClick={() => setShowPaymentModal(true)} 
+                        onClick={() => {
+                          setIsSplitPayment(false);
+                          setSplitAmounts({ efectivo: '', tarjeta: '', yape: '', credito: '' });
+                          setShowPaymentModal(true);
+                        }} 
                         disabled={cart.length === 0} 
                         className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${cart.length > 0 ? 'bg-indigo-100 hover:bg-indigo-200 text-indigo-700 active:scale-95' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                       >
-                        <Wallet size={20} /> Otros Medios (POS / Yape)
+                        <Wallet size={20} /> Otros Medios / Dividir Pago
                       </button>
                     </div>
                   </div>
@@ -1017,7 +1042,6 @@
           };
 
           const renderInventory = () => (
-             // Mismo código inventario... (simplificado visualmente aqui por espacio)
              <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
                 <div className="flex justify-between items-center mb-6">
                   <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><Package className="text-indigo-600" /> Inventario y Productos</h2>
@@ -1094,16 +1118,27 @@
 
             // 1. Cálculos de Ventas Totales por Método de Pago
             const totalVentasGlobal = filteredSales.reduce((sum, s) => sum + s.total, 0);
-            const ventasEfectivo = filteredSales.filter(s => s.paymentMethod === 'efectivo').reduce((sum, s) => sum + s.total, 0);
-            const ventasTarjeta = filteredSales.filter(s => s.paymentMethod === 'tarjeta').reduce((sum, s) => sum + s.total, 0);
-            const ventasYape = filteredSales.filter(s => s.paymentMethod === 'yape').reduce((sum, s) => sum + s.total, 0);
-            const ventasCredito = filteredSales.filter(s => s.paymentMethod === 'credito').reduce((sum, s) => sum + s.total, 0);
+            
+            // Calculamos individualmente tomando en cuenta los pagos divididos si existen
+            let ventasEfectivo = 0, ventasTarjeta = 0, ventasYape = 0, ventasCredito = 0;
+            filteredSales.forEach(s => {
+              if (s.paymentMethod === 'dividido' && s.splitAmounts) {
+                ventasEfectivo += (s.splitAmounts.efectivo || 0);
+                ventasTarjeta += (s.splitAmounts.tarjeta || 0);
+                ventasYape += (s.splitAmounts.yape || 0);
+                ventasCredito += (s.splitAmounts.credito || 0);
+              } else {
+                if (s.paymentMethod === 'efectivo') ventasEfectivo += s.total;
+                if (s.paymentMethod === 'tarjeta') ventasTarjeta += s.total;
+                if (s.paymentMethod === 'yape') ventasYape += s.total;
+                if (s.paymentMethod === 'credito') ventasCredito += s.total;
+              }
+            });
 
             // 2. Cálculos de Productos Vendidos por Categoría
             const salesBreakdown = {};
             filteredSales.forEach(sale => {
               sale.items.forEach(item => {
-                // Buscamos la categoría original del producto, si no existe ponemos 'Otros'
                 const prod = products.find(p => p.id === item.id);
                 const category = prod ? prod.category : 'Otros / Eliminados';
                 
@@ -1154,7 +1189,7 @@
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 pb-6">
                           {activeSessions.map(session => {
                             const totalCaja = session.initialCash + session.salesEfectivo;
-                            const totalVendido = session.salesEfectivo + session.salesTarjeta + (session.salesYape || 0);
+                            const totalVendido = session.salesEfectivo + session.salesTarjeta + (session.salesYape || 0) + (session.salesCredito || 0);
 
                             return (
                               <div key={session.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col">
@@ -1242,13 +1277,20 @@
                                 <tbody className="divide-y divide-gray-100">
                                   {sales.filter(s => s.sessionId === boxSession.id).map(sale => {
                                     const method = PAYMENT_METHODS.find(m => m.id === sale.paymentMethod);
-                                    const MethodIcon = method?.icon || Banknote;
+                                    const MethodIcon = sale.paymentMethod === 'dividido' ? PieChart : (method?.icon || Banknote);
+                                    const methodName = sale.paymentMethod === 'dividido' ? 'Dividido' : (method?.name || sale.paymentMethod);
+                                    const methodColor = sale.paymentMethod === 'dividido' ? 'bg-gray-800' : (method?.color || 'bg-gray-600');
+
                                     return (
                                       <tr key={sale.id} className="hover:bg-gray-50/80 transition-colors">
                                         <td className="px-6 py-4 font-mono text-indigo-600 font-bold uppercase text-xs">#{sale.id}</td>
                                         <td className="px-6 py-4 text-sm text-gray-600 font-medium">{formatTime(new Date(sale.date))}</td>
                                         <td className="px-6 py-4"><ul className="text-xs space-y-1">{sale.items.map(item => (<li key={item.id} className="text-gray-700 font-medium"><span className="text-indigo-600 font-bold">{item.quantity}x</span> {item.name}</li>))}</ul></td>
-                                        <td className="px-6 py-4"><span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold text-white uppercase ${method?.color || 'bg-gray-600'}`}><MethodIcon size={12} /> {method?.name}</span></td>
+                                        <td className="px-6 py-4">
+                                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold text-white uppercase ${methodColor}`}>
+                                            <MethodIcon size={12} /> {methodName}
+                                          </span>
+                                        </td>
                                         <td className="px-6 py-4 text-right font-black text-emerald-600">{formatCurrency(sale.total)}</td>
                                       </tr>
                                     );
@@ -1749,7 +1791,7 @@
                   {activeTab === 'users' && currentUser.role === 'admin' && renderUsers()}
                 </main>
 
-                {/* Modales de la Aplicación (Omitidos los interiores por simplicidad de lectura. Siguen existiendo igual) */}
+                {/* Modales de la Aplicación */}
                 {/* Modal Pago */}
                 {showPaymentModal && (
                   <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -1776,10 +1818,61 @@
                             <button onClick={() => processCreditCheckout()} className="flex-1 py-3 bg-orange-600 text-white rounded-xl font-bold shadow-lg shadow-orange-600/30 hover:bg-orange-700">Validar</button>
                           </div>
                         </div>
+                      ) : isSplitPayment ? (
+                        <div className="p-8">
+                          <p className="text-gray-500 mb-6 text-center text-sm font-semibold">Ingresa los montos por método de pago</p>
+                          <div className="space-y-3 mb-6">
+                            {PAYMENT_METHODS.map(m => {
+                              const Icon = m.icon;
+                              return (
+                                <div key={m.id} className="flex items-center justify-between gap-4">
+                                  <span className="font-semibold text-gray-700 w-1/3 flex items-center gap-2"><Icon size={16} className="text-gray-500" /> {m.name}</span>
+                                  <div className="relative flex-1">
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">S/</span>
+                                    <input 
+                                      type="number" step="0.10" min="0" 
+                                      className="w-full bg-gray-50 border border-gray-300 rounded-lg py-2 pl-8 pr-3 font-bold text-right focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      value={splitAmounts[m.id]} 
+                                      onChange={e => setSplitAmounts({...splitAmounts, [m.id]: e.target.value})} 
+                                    />
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                          
+                          {(() => {
+                            const entered = Object.values(splitAmounts).reduce((acc, val) => acc + (parseFloat(val) || 0), 0);
+                            const remaining = cartTotal - entered;
+                            return (
+                              <>
+                                <div className="flex justify-between items-center bg-gray-100 p-3 rounded-lg mb-6">
+                                  <span className="font-bold text-gray-600">Restante por cubrir:</span>
+                                  <span className={`font-black text-xl ${Math.abs(remaining) < 0.01 ? 'text-emerald-600' : remaining < 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                                    {Math.abs(remaining) < 0.01 ? 'S/ 0.00' : formatCurrency(remaining)}
+                                  </span>
+                                </div>
+                                <div className="flex gap-3">
+                                  <button onClick={() => setIsSplitPayment(false)} className="flex-1 py-3 bg-gray-200 text-gray-700 rounded-xl font-bold hover:bg-gray-300 transition-colors">Volver</button>
+                                  <button 
+                                    onClick={() => {
+                                      if (parseFloat(splitAmounts.credito) > 0) setPendingCreditValidation(true);
+                                      else handleCheckout('dividido', splitAmounts);
+                                    }} 
+                                    disabled={Math.abs(remaining) > 0.01}
+                                    className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/30 hover:bg-indigo-700 disabled:opacity-50 transition-all"
+                                  >
+                                    Procesar Pago
+                                  </button>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
                       ) : (
                         <div className="p-8">
                           <p className="text-gray-500 mb-6 text-center text-sm font-semibold">Selecciona el método de pago</p>
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-2 gap-4 mb-4">
                             {PAYMENT_METHODS.map(method => {
                               const Icon = method.icon;
                               return (
@@ -1796,10 +1889,16 @@
                               )
                             })}
                           </div>
+                          <button 
+                            onClick={() => setIsSplitPayment(true)}
+                            className="w-full bg-gray-900 hover:bg-black text-white p-4 rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-95 shadow-md font-bold"
+                          >
+                            <PieChart size={20} /> Pago Dividido (Mixto)
+                          </button>
                         </div>
                       )}
 
-                      {!pendingCreditValidation && (
+                      {!pendingCreditValidation && !isSplitPayment && (
                         <div className="p-4 bg-gray-50">
                           <button onClick={() => setShowPaymentModal(false)} className="w-full py-3.5 rounded-xl font-bold text-gray-600 hover:bg-gray-200 transition-colors">Cancelar</button>
                         </div>
@@ -2226,6 +2325,22 @@
                       <thead><tr><th className="pb-2">Cant</th><th className="pb-2">Descripción</th><th className="text-right pb-2">Total</th></tr></thead>
                       <tbody>{lastSale.items.map(item => (<tr key={item.id}><td className="align-top py-1">{item.quantity}</td><td className="align-top py-1 pr-2">{item.name}</td><td className="text-right align-top py-1">S/ {(item.price * item.quantity).toFixed(2)}</td></tr>))}</tbody>
                     </table>
+                    <div className="border-b border-black border-dashed mb-2"></div>
+                    
+                    {lastSale.paymentMethod === 'dividido' ? (
+                      <div className="mb-2">
+                        <div className="font-bold text-xs uppercase mb-1">Pago Dividido:</div>
+                        {lastSale.splitAmounts?.efectivo > 0 && <div className="flex justify-between text-xs"><span>Efectivo:</span><span>S/ {lastSale.splitAmounts.efectivo.toFixed(2)}</span></div>}
+                        {lastSale.splitAmounts?.tarjeta > 0 && <div className="flex justify-between text-xs"><span>Tarjeta:</span><span>S/ {lastSale.splitAmounts.tarjeta.toFixed(2)}</span></div>}
+                        {lastSale.splitAmounts?.yape > 0 && <div className="flex justify-between text-xs"><span>Yape:</span><span>S/ {lastSale.splitAmounts.yape.toFixed(2)}</span></div>}
+                        {lastSale.splitAmounts?.credito > 0 && <div className="flex justify-between text-xs"><span>Crédito:</span><span>S/ {lastSale.splitAmounts.credito.toFixed(2)}</span></div>}
+                      </div>
+                    ) : (
+                      <div className="mb-2 text-xs uppercase">
+                        Pago en: {PAYMENT_METHODS.find(m => m.id === lastSale.paymentMethod)?.name || lastSale.paymentMethod}
+                      </div>
+                    )}
+                    
                     <div className="border-b border-black border-dashed mb-2"></div>
                     <div className="flex justify-between font-black text-lg mt-2 mb-6"><span>TOTAL:</span><span>S/ {lastSale.total.toFixed(2)}</span></div>
                     <div className="text-center text-xs">¡Gracias por su preferencia!</div>
