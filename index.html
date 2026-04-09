@@ -74,6 +74,7 @@
           ClipboardCheck
         } from 'https://esm.sh/lucide-react@0.292.0';
 
+        // --- Importaciones de Firebase ---
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
@@ -155,6 +156,7 @@
           // --- Estados Principales Sincronizados ---
           const [activeTab, setActiveTab] = useState('pos');
           const [salesTab, setSalesTab] = useState('actual');
+          const [expandedReportId, setExpandedReportId] = useState(null);
           const [products, setProducts] = useState([]);
           const [categories, setCategories] = useState([]);
           const [sales, setSales] = useState([]);
@@ -170,11 +172,19 @@
             const offset = today.getTimezoneOffset() * 60000;
             return (new Date(Date.now() - offset)).toISOString().split('T')[0];
           };
-          const [purchasesStartDate, setPurchasesStartDate] = useState(getTodayStr());
+          const getFirstDayOfMonthStr = () => {
+            const today = new Date();
+            const offset = today.getTimezoneOffset() * 60000;
+            const localDate = new Date(Date.now() - offset);
+            localDate.setDate(1); // Set to 1st day of the current month
+            return localDate.toISOString().split('T')[0];
+          };
+
+          const [purchasesStartDate, setPurchasesStartDate] = useState(getFirstDayOfMonthStr());
           const [purchasesEndDate, setPurchasesEndDate] = useState(getTodayStr());
-          const [expensesStartDate, setExpensesStartDate] = useState(getTodayStr());
+          const [expensesStartDate, setExpensesStartDate] = useState(getFirstDayOfMonthStr());
           const [expensesEndDate, setExpensesEndDate] = useState(getTodayStr());
-          const [historyStartDate, setHistoryStartDate] = useState(getTodayStr());
+          const [historyStartDate, setHistoryStartDate] = useState(getFirstDayOfMonthStr());
           const [historyEndDate, setHistoryEndDate] = useState(getTodayStr());
 
           // --- Estados de Sesión Local ---
@@ -186,6 +196,20 @@
           const [closeBoxPassword, setCloseBoxPassword] = useState(''); 
           const [lastSale, setLastSale] = useState(null);
           const [lastCloseReport, setLastCloseReport] = useState(null);
+
+          // Controles para evitar dobles peticiones
+          const [isProcessingOpen, setIsProcessingOpen] = useState(false);
+          const [isProcessingClose, setIsProcessingClose] = useState(false);
+
+          // Identificador único de computadora para evitar sesión doble
+          const [deviceId] = useState(() => {
+            let id = localStorage.getItem('sandubai_device_id');
+            if (!id) {
+              id = Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+              localStorage.setItem('sandubai_device_id', id);
+            }
+            return id;
+          });
 
           // --- Estados de UI ---
           const [selectedCategory, setSelectedCategory] = useState('Todos');
@@ -222,8 +246,6 @@
           // Formularios
           const [stockForm, setStockForm] = useState({ productId: '', quantity: 1, reason: 'Compra a proveedor' });
           const [productForm, setProductForm] = useState(DEFAULT_PRODUCT_FORM);
-          const [imageFile, setImageFile] = useState(null);
-          const [imagePreview, setImagePreview] = useState('');
           const [isSavingProduct, setIsSavingProduct] = useState(false);
           const [newCategoryName, setNewCategoryName] = useState('');
           const [userForm, setUserForm] = useState(DEFAULT_USER_FORM);
@@ -408,79 +430,95 @@
           // --- Funciones de Caja ---
           const handleOpenBox = async (e) => {
             e.preventDefault();
-            const initialCash = parseFloat(initialCashForm) || 0;
-            const sessionData = {
-              id: Math.random().toString(36).substr(2, 9),
-              startTime: new Date().toISOString(),
-              initialCash: initialCash,
-              salesEfectivo: 0,
-              salesTarjeta: 0,
-              salesYape: 0,
-              salesCredito: 0,
-              totalSalesCount: 0,
-              openedBy: currentUser.username,
-              assignedStock: {} // Inicializa el control de stock vacío para este turno
-            };
-            
-            await setDoc(getDocRef('pos_sessions', sessionData.id), sessionData);
-            setInitialCashForm('');
+            if (isProcessingOpen) return;
+            setIsProcessingOpen(true);
+
+            try {
+              const initialCash = parseFloat(initialCashForm) || 0;
+              const sessionData = {
+                id: Math.random().toString(36).substr(2, 9),
+                startTime: new Date().toISOString(),
+                initialCash: initialCash,
+                salesEfectivo: 0,
+                salesTarjeta: 0,
+                salesYape: 0,
+                salesCredito: 0,
+                totalSalesCount: 0,
+                openedBy: currentUser.username,
+                deviceId: deviceId,
+                assignedStock: {}
+              };
+              
+              await setDoc(getDocRef('pos_sessions', sessionData.id), sessionData);
+              setInitialCashForm('');
+            } finally {
+              setIsProcessingOpen(false);
+            }
           };
 
           const handleCloseBox = async (e) => {
             e.preventDefault();
-            if (!boxSession) return;
+            if (!boxSession || isProcessingClose) return;
             
             if (closeBoxPassword !== currentUser.password) {
               setDialog({ type: 'alert', message: 'Contraseña incorrecta. No puedes cerrar la caja.' });
               return;
             }
 
-            // CALCULAR PRODUCTOS VENDIDOS EXACTOS DE ESTE TURNO
-            const sessionSales = sales.filter(s => s.sessionId === boxSession.id);
-            const soldItems = {};
-            sessionSales.forEach(sale => {
-              sale.items.forEach(item => {
-                if (item.isPromotion) {
-                  // Si es combo, convertir a su producto base para el cuadre
-                  const bId = item.baseProductId;
-                  soldItems[bId] = (soldItems[bId] || 0) + (item.quantity * item.baseQuantity);
-                } else {
-                  soldItems[item.id] = (soldItems[item.id] || 0) + item.quantity;
-                }
+            setIsProcessingClose(true);
+
+            try {
+              const sessionSales = sales.filter(s => s.sessionId === boxSession.id);
+              const soldItems = {};
+              sessionSales.forEach(sale => {
+                sale.items.forEach(item => {
+                  if (item.isPromotion) {
+                    const bId = item.baseProductId;
+                    soldItems[bId] = (soldItems[bId] || 0) + (item.quantity * item.baseQuantity);
+                  } else {
+                    soldItems[item.id] = (soldItems[item.id] || 0) + item.quantity;
+                  }
+                });
               });
-            });
 
-            const efectivoEsperado = boxSession.initialCash + boxSession.salesEfectivo;
-            const declaredCash = efectivoEsperado; // Auto-cuadre, no pedimos monto físico
+              const efectivoEsperado = boxSession.initialCash + boxSession.salesEfectivo;
+              const declaredCash = efectivoEsperado; 
 
-            const report = {
-              ...boxSession,
-              endTime: new Date(),
-              totalVentas: boxSession.salesEfectivo + boxSession.salesTarjeta + boxSession.salesYape + (boxSession.salesCredito || 0),
-              efectivoEsperado: efectivoEsperado,
-              efectivoDeclarado: declaredCash,
-              descuadre: declaredCash - efectivoEsperado,
-              closedBy: currentUser.username,
-              closedByName: currentUser.name,
-              soldItems: soldItems // Guardamos el consolidado de lo vendido para el control
-            };
-            
-            const reportId = Math.random().toString(36).substr(2, 9);
-            await setDoc(getDocRef('pos_reports', reportId), {
-              ...report,
-              id: reportId,
-              startTime: report.startTime.toISOString(),
-              endTime: report.endTime.toISOString()
-            });
+              const report = {
+                ...boxSession,
+                endTime: new Date(),
+                totalVentas: boxSession.salesEfectivo + boxSession.salesTarjeta + boxSession.salesYape + (boxSession.salesCredito || 0),
+                efectivoEsperado: efectivoEsperado,
+                efectivoDeclarado: declaredCash,
+                descuadre: declaredCash - efectivoEsperado,
+                closedBy: currentUser.username,
+                closedByName: currentUser.name,
+                soldItems: soldItems 
+              };
+              
+              // Usamos el MISMO ID de la sesión para el reporte, garantizando que NUNCA se duplique
+              const reportId = boxSession.id;
+              await setDoc(getDocRef('pos_reports', reportId), {
+                ...report,
+                id: reportId,
+                startTime: typeof report.startTime === 'string' ? report.startTime : report.startTime.toISOString(),
+                endTime: report.endTime.toISOString()
+              });
 
-            await deleteDoc(getDocRef('pos_sessions', boxSession.id));
+              await deleteDoc(getDocRef('pos_sessions', boxSession.id));
 
-            setShowCloseBoxModal(false);
-            setCloseBoxPassword('');
-            
-            setLastSale(null);
-            setLastCloseReport(report);
-            setTimeout(() => { window.print(); }, 500);
+              setShowCloseBoxModal(false);
+              setCloseBoxPassword('');
+              
+              setLastSale(null);
+              setLastCloseReport(report);
+              setTimeout(() => { window.print(); }, 500);
+            } catch (error) {
+              console.error("Error cerrando caja:", error);
+              setDialog({ type: 'alert', message: 'Hubo un error al cerrar la caja. Por favor, reintenta.' });
+            } finally {
+              setIsProcessingClose(false);
+            }
           };
 
           // --- Funciones para Asignar Stock de Control (Solo Admin) ---
@@ -646,7 +684,6 @@
             setIsSplitPayment(false);
             setSplitAmounts({ efectivo: '', tarjeta: '', yape: '', credito: '' });
 
-            // Ahora imprime el ticket SIEMPRE, para cualquier método de pago
             setTimeout(() => { window.print(); }, 500);
           };
 
@@ -662,11 +699,13 @@
             setPurchaseForm({ ...purchaseForm, items: [...purchaseForm.items, newItem] });
             setPurchaseItemTemp({ productId: '', qty: 1, cost: '' });
           };
+
           const handleRemovePurchaseItem = (index) => {
             const newItems = [...purchaseForm.items];
             newItems.splice(index, 1);
             setPurchaseForm({ ...purchaseForm, items: newItems });
           };
+
           const handleSavePurchase = async (e) => {
             e.preventDefault();
             if (purchaseForm.items.length === 0) {
@@ -737,6 +776,13 @@
             e.preventDefault();
             const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
             if (user) {
+              // Validar si el usuario tiene sesión en otro dispositivo
+              const userSession = activeSessions.find(s => s.openedBy === user.username);
+              if (userSession && userSession.deviceId && userSession.deviceId !== deviceId) {
+                setDialog({ type: 'alert', message: `El usuario "${user.username}" ya tiene una caja abierta en otra computadora. Debe cerrar el turno allá para poder ingresar aquí.` });
+                return;
+              }
+
               setCurrentUser(user);
               if (user.role === 'admin') {
                 setActiveTab('sales'); setSalesTab('actual');
@@ -776,9 +822,7 @@
             setProductForm(product ? product : { ...DEFAULT_PRODUCT_FORM, category: categories[0] || '' });
             setIsSavingProduct(false); setShowProductModal(true);
           };
-          const handleImageChange = (e) => {
-            // Ya no usamos imágenes
-          };
+          
           const handleSaveProduct = async (e) => {
             e.preventDefault();
             setIsSavingProduct(true);
@@ -794,6 +838,7 @@
               setIsSavingProduct(false);
             }
           };
+          
           const handleDeleteProduct = async (id) => {
             setDialog({ type: 'confirm', message: '¿Eliminar este producto permanentemente de todas las pantallas?', onConfirm: async () => {
               await deleteDoc(getDocRef('pos_products', id.toString())); setCart(cart.filter(item => item.id !== id));
@@ -904,8 +949,8 @@
                       <input type="number" step="0.10" min="0" required autoFocus className="w-full bg-gray-50 border border-gray-300 rounded-xl py-3 pl-10 pr-4 text-gray-900 font-bold text-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" value={initialCashForm} onChange={(e) => setInitialCashForm(e.target.value)} placeholder="0.00" />
                     </div>
                   </div>
-                  <button type="submit" className="w-full py-4 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 text-lg">
-                    <Unlock size={22} /> Iniciar Turno de Caja
+                  <button type="submit" disabled={isProcessingOpen} className="w-full py-4 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 text-lg disabled:opacity-50">
+                    <Unlock size={22} /> {isProcessingOpen ? 'Abriendo Turno...' : 'Iniciar Turno de Caja'}
                   </button>
                 </form>
               </div>
@@ -913,7 +958,6 @@
           );
 
           const renderPOS = () => {
-             // Mismo código de POS ...
             if (!boxSession) return renderOpenBoxScreen();
 
             return (
@@ -928,11 +972,11 @@
                     </div>
                     {isSyncing ? (
                       <div className="bg-blue-50 text-blue-600 border border-blue-200 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm animate-pulse text-sm">
-                        <Cloud size={18}/> Conectando...
+                        <Cloud size={18} /> Conectando...
                       </div>
                     ) : (
                       <div className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm text-sm" title="Stock sincronizado en vivo">
-                        <Cloud size={18}/> En línea
+                        <Cloud size={18} /> En línea
                       </div>
                     )}
                   </div>
@@ -961,7 +1005,7 @@
                         >
                           {product.isPromotion && (
                              <div className="absolute top-0 right-0 bg-rose-500 text-white text-[9px] font-black uppercase px-2 py-1 rounded-bl-xl rounded-tr-xl z-10 shadow-sm flex items-center gap-1">
-                               <Gift size={12}/> Combo
+                               <Gift size={12} /> Combo
                              </div>
                           )}
                           <div className="flex-1 flex flex-col overflow-hidden pr-2 md:pr-4">
@@ -989,7 +1033,10 @@
                   </div>
                   <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-gray-50/50">
                     {cart.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-gray-400"><ShoppingCart size={48} className="mb-4 text-gray-300" /><p className="font-medium">El carrito está vacío</p></div>
+                      <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                        <ShoppingCart size={48} className="mb-4 text-gray-300" />
+                        <p className="font-medium">El carrito está vacío</p>
+                      </div>
                     ) : (
                       <div className="space-y-3">
                         {cart.map(item => (
@@ -1044,36 +1091,61 @@
           const renderInventory = () => (
              <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
                 <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><Package className="text-indigo-600" /> Inventario y Productos</h2>
+                  <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
+                    <Package className="text-indigo-600" /> Inventario y Productos
+                  </h2>
                   <div className="flex gap-3">
                     {currentUser?.role === 'admin' && (
                       <>
-                      <button onClick={handleOpenAudit} className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-amber-500/20"><ClipboardCheck size={18} /> Auditoría de Stock</button>
-                      <button onClick={() => setShowCategoryModal(true)} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"><Tags size={18} /> Categorías</button>
-                      <button onClick={() => handleOpenProductModal()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20"><Plus size={18} /> Nuevo Producto / Promo</button>
+                      <button onClick={handleOpenAudit} className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-amber-500/20">
+                        <ClipboardCheck size={18} /> Auditoría de Stock
+                      </button>
+                      <button onClick={() => setShowCategoryModal(true)} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm">
+                        <Tags size={18} /> Categorías
+                      </button>
+                      <button onClick={() => handleOpenProductModal()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20">
+                        <Plus size={18} /> Nuevo Producto / Promo
+                      </button>
                       </>
                     )}
-                    <button onClick={() => setShowStockModal(true)} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm" title="Solo para cuadrar diferencias. Usa el módulo Compras para ingresos reales."><Edit2 size={18} /> Ajuste de Stock</button>
+                    <button onClick={() => setShowStockModal(true)} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm" title="Solo para cuadrar diferencias. Usa el módulo Compras para ingresos reales.">
+                      <Edit2 size={18} /> Ajuste de Stock
+                    </button>
                   </div>
                 </div>
                 <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
                   <div className="overflow-x-auto flex-1 custom-scrollbar">
                     <table className="w-full text-left border-collapse">
                       <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0 z-10">
-                        <tr><th className="px-6 py-4">Producto</th><th className="px-6 py-4">Categoría</th><th className="px-6 py-4">Precio</th><th className="px-6 py-4 text-center">Stock Actual</th><th className="px-6 py-4 text-center">Estado</th>{currentUser?.role === 'admin' && <th className="px-6 py-4 text-right">Acciones</th>}</tr>
+                        <tr>
+                          <th className="px-6 py-4">Producto</th>
+                          <th className="px-6 py-4">Categoría</th>
+                          <th className="px-6 py-4">Precio</th>
+                          <th className="px-6 py-4 text-center">Stock Actual</th>
+                          <th className="px-6 py-4 text-center">Estado</th>
+                          {currentUser?.role === 'admin' && <th className="px-6 py-4 text-right">Acciones</th>}
+                        </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {products.map(p => {
                           const visualStock = getVirtualStock(p);
                           return (
                           <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
-                            <td className="px-6 py-4"><div className="font-bold text-gray-800">{p.name}</div>{p.isPromotion && <div className="text-[10px] text-gray-500 font-bold uppercase mt-0.5">Combo (Descuenta {p.baseQuantity}x Base ID:{p.baseProductId})</div>}</td>
+                            <td className="px-6 py-4">
+                              <div className="font-bold text-gray-800">{p.name}</div>
+                              {p.isPromotion && <div className="text-[10px] text-gray-500 font-bold uppercase mt-0.5">Combo (Descuenta {p.baseQuantity}x Base ID:{p.baseProductId})</div>}
+                            </td>
                             <td className="px-6 py-4"><span className="bg-gray-100 text-gray-600 border border-gray-200 px-3 py-1 rounded-full text-xs font-semibold">{p.category}</span></td>
                             <td className="px-6 py-4 font-bold text-emerald-600">{formatCurrency(p.price)}</td>
                             <td className="px-6 py-4 text-center font-black text-lg text-gray-700 transition-colors">{p.isPromotion ? (<div className="flex flex-col items-center leading-tight"><span className="text-rose-600">{visualStock}</span><span className="text-[9px] text-gray-400 font-bold uppercase mt-1">Máx Posible</span></div>) : (visualStock)}</td>
                             <td className="px-6 py-4 text-center">{visualStock > 20 ? <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full text-xs font-bold">Óptimo</span> : visualStock > 0 ? <span className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full text-xs font-bold">Bajo</span> : <span className="inline-flex items-center gap-1.5 bg-red-100 text-red-700 px-2.5 py-1 rounded-full text-xs font-bold">Agotado</span>}</td>
                             {currentUser?.role === 'admin' && (
-                              <td className="px-6 py-4 text-right"><div className="flex items-center justify-end gap-2"><button onClick={() => handleOpenProductModal(p)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit2 size={18} /></button><button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18} /></button></div></td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <button onClick={() => handleOpenProductModal(p)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit2 size={18} /></button>
+                                  <button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18} /></button>
+                                </div>
+                              </td>
                             )}
                           </tr>
                         )})}
@@ -1084,14 +1156,56 @@
              </div>
           );
 
-          const renderPurchases = () => { /* Mismo codigo Compras ... */ 
+          const renderPurchases = () => { 
              const startObjP = purchasesStartDate ? new Date(purchasesStartDate + 'T00:00:00') : new Date('2000-01-01');
              const endObjP = purchasesEndDate ? new Date(purchasesEndDate + 'T23:59:59') : new Date('2100-01-01');
              const filteredPurchases = purchases.filter(p => { const d = new Date(p.date); return d >= startObjP && d <= endObjP; });
-             return (<div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><ShoppingBag className="text-indigo-600" /> Compras e Ingresos a Almacén</h2><button onClick={() => setShowPurchaseModal(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-emerald-600/20"><Plus size={18} /> Registrar Compra (Factura/Boleta)</button></div><div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-wrap items-center gap-4 mb-4 flex-shrink-0"><div className="flex items-center gap-2"><Calendar className="text-gray-400" size={20} /><span className="font-bold text-gray-700">Desde:</span><input type="date" value={purchasesStartDate} onChange={e => setPurchasesStartDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none" /></div><div className="flex items-center gap-2"><span className="font-bold text-gray-700">Hasta:</span><input type="date" value={purchasesEndDate} onChange={e => setPurchasesEndDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none" /></div><div className="ml-auto flex items-center gap-3"><span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">{filteredPurchases.length} registros</span><div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">Total Invertido:</span><span className="text-xl font-black text-emerald-600">{formatCurrency(filteredPurchases.reduce((sum, p) => sum + p.total, 0))}</span></div></div></div><div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col"><div className="overflow-x-auto flex-1 custom-scrollbar"><table className="w-full text-left border-collapse"><thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0"><tr><th className="px-6 py-4">Fecha</th><th className="px-6 py-4">Documento</th><th className="px-6 py-4">Proveedor</th><th className="px-6 py-4">Detalle de Compra</th><th className="px-6 py-4 text-right">Total Invertido</th><th className="px-6 py-4">Registrado por</th></tr></thead><tbody className="divide-y divide-gray-100">{filteredPurchases.map(p => (<tr key={p.id} className="hover:bg-gray-50/80 transition-colors"><td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(new Date(p.date))}</td><td className="px-6 py-4"><span className="font-bold text-gray-700 uppercase">{p.docType}</span><div className="text-xs text-gray-500">#{p.docNumber}</div></td><td className="px-6 py-4 font-bold text-gray-800">{p.provider || 'Sin Nombre'}</td><td className="px-6 py-4"><ul className="text-xs space-y-1">{p.items.map((item, i) => (<li key={i} className="text-gray-700"><span className="font-bold text-indigo-600">{item.qty}x</span> {item.productName} <span className="text-gray-400">({formatCurrency(item.cost)} c/u)</span></li>))}</ul></td><td className="px-6 py-4 text-right font-black text-rose-600">{formatCurrency(p.total)}</td><td className="px-6 py-4 text-sm text-gray-600 uppercase">{p.registeredBy}</td></tr>))}</tbody></table></div></div></div>);
+             return (
+               <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
+                 <div className="flex justify-between items-center mb-6">
+                   <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><ShoppingBag className="text-indigo-600" /> Compras e Ingresos a Almacén</h2>
+                   <button onClick={() => setShowPurchaseModal(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-emerald-600/20"><Plus size={18} /> Registrar Compra (Factura/Boleta)</button>
+                 </div>
+                 <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-wrap items-center gap-4 mb-4 flex-shrink-0">
+                   <div className="flex items-center gap-2"><Calendar className="text-gray-400" size={20} /><span className="font-bold text-gray-700">Desde:</span><input type="date" value={purchasesStartDate} onChange={e => setPurchasesStartDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+                   <div className="flex items-center gap-2"><span className="font-bold text-gray-700">Hasta:</span><input type="date" value={purchasesEndDate} onChange={e => setPurchasesEndDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+                   <div className="ml-auto flex items-center gap-3">
+                     <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">{filteredPurchases.length} registros</span>
+                     <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">Total Invertido:</span><span className="text-xl font-black text-emerald-600">{formatCurrency(filteredPurchases.reduce((sum, p) => sum + p.total, 0))}</span></div>
+                   </div>
+                 </div>
+                 <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
+                   <div className="overflow-x-auto flex-1 custom-scrollbar">
+                     <table className="w-full text-left border-collapse">
+                       <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0">
+                         <tr><th className="px-6 py-4">Fecha</th><th className="px-6 py-4">Documento</th><th className="px-6 py-4">Proveedor</th><th className="px-6 py-4">Detalle de Compra</th><th className="px-6 py-4 text-right">Total Invertido</th><th className="px-6 py-4">Registrado por</th></tr>
+                       </thead>
+                       <tbody className="divide-y divide-gray-100">
+                         {filteredPurchases.map(p => (
+                           <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
+                             <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(new Date(p.date))}</td>
+                             <td className="px-6 py-4"><span className="font-bold text-gray-700 uppercase">{p.docType}</span><div className="text-xs text-gray-500">#{p.docNumber}</div></td>
+                             <td className="px-6 py-4 font-bold text-gray-800">{p.provider || 'Sin Nombre'}</td>
+                             <td className="px-6 py-4">
+                               <ul className="text-xs space-y-1">
+                                 {p.items.map((item, i) => (
+                                   <li key={i} className="text-gray-700"><span className="font-bold text-indigo-600">{item.qty}x</span> {item.productName} <span className="text-gray-400">({formatCurrency(item.cost)} c/u)</span></li>
+                                 ))}
+                               </ul>
+                             </td>
+                             <td className="px-6 py-4 text-right font-black text-rose-600">{formatCurrency(p.total)}</td>
+                             <td className="px-6 py-4 text-sm text-gray-600 uppercase">{p.registeredBy}</td>
+                           </tr>
+                         ))}
+                       </tbody>
+                     </table>
+                   </div>
+                 </div>
+               </div>
+             );
           };
 
-          const renderExpenses = () => { /* Mismo codigo Egresos ... */
+          const renderExpenses = () => { 
              const startObjE = expensesStartDate ? new Date(expensesStartDate + 'T00:00:00') : new Date('2000-01-01');
              const endObjE = expensesEndDate ? new Date(expensesEndDate + 'T23:59:59') : new Date('2100-01-01');
              const filteredExpenses = expenses.filter(e => { const d = new Date(e.date); return d >= startObjE && d <= endObjE; });
@@ -1111,9 +1225,18 @@
             });
 
             // Filtrar CIERRES DE CAJA en ese rango
-            const filteredReports = boxReports.filter(report => {
+            let filteredReports = boxReports.filter(report => {
               const d = new Date(report.endTime);
               return d >= startObjH && d <= endObjH;
+            });
+
+            // Eliminar cierres duplicados generados por errores de conexión en el pasado
+            const seenSessions = new Set();
+            filteredReports = filteredReports.filter(report => {
+              const signature = `${report.startTime.getTime()}_${report.openedBy}`;
+              if (seenSessions.has(signature)) return false; 
+              seenSessions.add(signature);
+              return true;
             });
 
             // 1. Cálculos de Ventas Totales por Método de Pago
@@ -1267,7 +1390,7 @@
                           <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col relative">
                             <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                               <h3 className="font-bold text-gray-800 flex items-center gap-2"><ShoppingCart size={18}/> Ventas de este turno (Local)</h3>
-                              <button onClick={() => setShowCloseBoxModal(true)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-red-600/20"><Lock size={18} /> Cerrar Turno Activo</button>
+                              <button onClick={() => setShowCloseBoxModal(true)} disabled={isProcessingClose} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-red-600/20 disabled:opacity-50"><Lock size={18} /> {isProcessingClose ? 'Cerrando...' : 'Cerrar Turno Activo'}</button>
                             </div>
                             <div className="overflow-x-auto flex-1 custom-scrollbar">
                               <table className="w-full text-left border-collapse">
@@ -1447,38 +1570,152 @@
                             <table className="w-full text-left border-collapse text-sm">
                               <thead className="bg-gray-100 text-gray-600 uppercase font-semibold">
                                 <tr>
-                                  <th className="px-4 py-3 border-b border-gray-200">Turno (Apertura/Cierre)</th>
-                                  <th className="px-4 py-3 border-b border-gray-200 text-center">Operaciones</th>
-                                  <th className="px-4 py-3 border-b border-gray-200 text-right">Efectivo Sistema</th>
-                                  <th className="px-4 py-3 border-b border-gray-200 text-right bg-amber-50">Ef. Declarado</th>
-                                  <th className="px-4 py-3 border-b border-gray-200 text-right">Descuadre</th>
+                                  <th className="px-6 py-4 border-b border-gray-200">Turno (Apertura/Cierre)</th>
+                                  <th className="px-6 py-4 border-b border-gray-200 text-center">Operaciones</th>
+                                  <th className="px-6 py-4 border-b border-gray-200 text-right">Monto Apertura</th>
+                                  <th className="px-6 py-4 border-b border-gray-200 text-right bg-amber-50">Ventas Efectivo</th>
+                                  <th className="px-6 py-4 border-b border-gray-200 text-right">Descuadre</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100">
                                 {filteredReports.map(report => (
-                                  <tr key={report.id}>
-                                    <td className="px-4 py-3 text-gray-700">
-                                      <div className="flex flex-col gap-0.5">
-                                        <span className="font-medium text-xs text-gray-500">{formatDate(new Date(report.startTime))} a {formatTime(new Date(report.endTime))}</span>
-                                        <span className="text-[10px] text-gray-400 uppercase font-bold">Cajero: <span className="text-gray-600">{report.openedBy}</span></span>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-center font-bold text-gray-600">{report.totalSalesCount}</td>
-                                    <td className="px-4 py-3 text-right">
-                                      <div className="flex flex-col items-end">
-                                        <span className="font-black text-gray-800">{formatCurrency(report.efectivoEsperado)}</span>
-                                        <span className="text-[9px] text-gray-400 font-bold uppercase mt-0.5">Base {formatCurrency(report.initialCash)}</span>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-right bg-amber-50/30">
-                                      <span className="font-black text-amber-700">{formatCurrency(report.efectivoDeclarado)}</span>
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                      <span className={`font-black text-xs ${report.descuadre === 0 ? 'text-emerald-600' : report.descuadre > 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                                        {report.descuadre === 0 ? 'CUADRADO' : report.descuadre > 0 ? `+${formatCurrency(report.descuadre)}` : formatCurrency(report.descuadre)}
-                                      </span>
-                                    </td>
-                                  </tr>
+                                  <React.Fragment key={report.id}>
+                                    <tr className="hover:bg-gray-50/80 transition-colors">
+                                      <td className="px-6 py-4 text-sm text-gray-700">
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="font-bold text-[11px] text-emerald-600 whitespace-nowrap">Apertura: {formatDate(new Date(report.startTime))}</span>
+                                  <span className="font-bold text-[11px] text-red-500 whitespace-nowrap">Cierre: {formatDate(new Date(report.endTime))}</span>
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold mt-1">Cajero: <span className="text-gray-600">{report.openedBy}</span></span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                <div className="flex flex-col items-center gap-1.5">
+                                  <span className="font-bold text-gray-600">{report.totalSalesCount}</span>
+                                  <button 
+                                    onClick={() => setExpandedReportId(expandedReportId === report.id ? null : report.id)}
+                                    className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md hover:bg-indigo-100 transition-colors font-bold whitespace-nowrap print:hidden"
+                                  >
+                                    {expandedReportId === report.id ? 'Ocultar Ventas' : 'Ver Ventas'}
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <span className="font-black text-gray-800">{formatCurrency(report.initialCash)}</span>
+                              </td>
+                                      <td className="px-6 py-4 text-center">
+                                        <div className="flex flex-col items-center gap-1.5">
+                                          <span className="font-bold text-gray-600">{report.totalSalesCount}</span>
+                                          <button 
+                                            onClick={() => setExpandedReportId(expandedReportId === report.id ? null : report.id)}
+                                            className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md hover:bg-indigo-100 transition-colors font-bold whitespace-nowrap"
+                                          >
+                                            {expandedReportId === report.id ? 'Ocultar Ventas' : 'Ver Ventas'}
+                                          </button>
+                                        </div>
+                                      </td>
+                                      <td className="px-6 py-4 text-right">
+                                <span className={`font-black text-xs ${report.descuadre === 0 ? 'text-emerald-600' : report.descuadre > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                                  {report.descuadre === 0 ? 'CUADRADO' : report.descuadre > 0 ? `+${formatCurrency(report.descuadre)}` : formatCurrency(report.descuadre)}
+                                </span>
+                              </td>
+                            </tr>
+                            
+                            {/* Mostrar Detalle de Ventas si está expandido */}
+                            {expandedReportId === report.id && (() => {
+                              // Respaldo de compatibilidad para turnos antiguos: si no coinciden por ID, coinciden por rango de horas exacto y cajero
+                              const reportSales = sales.filter(s => 
+                                s.sessionId === report.id || 
+                                (s.soldBy === report.openedBy && s.date >= report.startTime && s.date <= report.endTime)
+                              );
+
+                              return (
+                                <tr className="bg-gray-50 border-b border-gray-200 print:bg-white print:border-b print:border-gray-200">
+                                  <td colSpan="5" className="px-6 py-4">
+                                     <div className="text-xs font-bold text-gray-800 mb-2 flex items-center gap-1 uppercase">
+                                       <Receipt size={14}/> Detalle de Operaciones de este turno
+                                     </div>
+                                     {reportSales.length === 0 ? (
+                                        <p className="text-gray-500 italic text-xs py-2">No se registraron operaciones.</p>
+                                     ) : (
+                                        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                                          <table className="w-full text-xs text-left border-collapse">
+                                            <thead className="bg-gray-50 text-gray-600 uppercase font-semibold">
+                                              <tr>
+                                                <th className="px-3 py-2 border-b border-gray-200">Hora / Venta</th>
+                                                <th className="px-3 py-2 border-b border-gray-200">Detalle de Productos</th>
+                                                <th className="px-3 py-2 border-b border-gray-200 text-center">Pago</th>
+                                                <th className="px-3 py-2 border-b border-gray-200 text-right">Total</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                              {reportSales.map(sale => {
+                                                const method = PAYMENT_METHODS.find(m => m.id === sale.paymentMethod);
+                                                const MethodIcon = sale.paymentMethod === 'dividido' ? PieChart : (method?.icon || Banknote);
+                                                const methodName = sale.paymentMethod === 'dividido' ? 'Dividido' : (method?.name || sale.paymentMethod);
+                                                const methodColor = sale.paymentMethod === 'dividido' ? 'bg-gray-800' : (method?.color || 'bg-gray-600');
+
+                                                return (
+                                                  <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="px-3 py-2">
+                                                      <div className="font-bold text-gray-800">{formatTime(sale.date)}</div>
+                                                      <div className="font-mono text-indigo-600 font-bold uppercase text-[9px]">#{sale.id}</div>
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                      <ul className="space-y-0.5">
+                                                        {sale.items.map((item, idx) => (
+                                                          <li key={idx} className="text-gray-700">
+                                                            <span className="text-indigo-600 font-bold">{item.quantity}x</span> {item.name}
+                                                          </li>
+                                                        ))}
+                                                      </ul>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-center">
+                                                       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold text-white uppercase ${methodColor}`}>
+                                                         <MethodIcon size={10} /> {methodName}
+                                                       </span>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-right font-black text-emerald-600">{formatCurrency(sale.total)}</td>
+                                                  </tr>
+                                                )
+                                              })}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                     )}
+                                  </td>
+                                </tr>
+                              );
+                            })()}
+                            
+                            {/* Mostrar el Control de Barra en el UI si la caja lo tuvo */}
+                            {report.assignedStock && Object.keys(report.assignedStock).length > 0 && (
+                              <tr className="bg-indigo-50/40 avoid-page-break print:bg-white print:border-b print:border-gray-200">
+                                        <td colSpan="5" className="px-6 py-4">
+                                           <div className="text-xs font-bold text-indigo-800 mb-2 flex items-center gap-1 uppercase">
+                                             <ClipboardList size={14}/> Detalle de Control de Barra
+                                           </div>
+                                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                             {Object.entries(report.assignedStock).map(([pId, assignedQty]) => {
+                                                const prod = products.find(p => p.id === parseInt(pId));
+                                                if (!prod) return null;
+                                                const soldQty = report.soldItems?.[pId] || 0;
+                                                const expectedQty = assignedQty - soldQty;
+                                                return (
+                                                   <div key={pId} className="bg-white border border-indigo-100 rounded-lg p-2.5 flex flex-col justify-between items-start shadow-sm print:border-gray-300">
+                                                     <span className="font-bold text-gray-700 text-[11px] leading-tight w-full truncate border-b border-gray-100 pb-1.5 mb-1.5">{prod.name}</span>
+                                                     <div className="flex w-full items-center justify-between gap-1 text-[10px]">
+                                                       <div className="text-center"><div className="text-gray-400 uppercase font-bold">Asig.</div><div className="font-bold text-gray-800 text-xs">{assignedQty}</div></div>
+                                                       <div className="text-center"><div className="text-gray-400 uppercase font-bold">Vend.</div><div className="font-bold text-emerald-600 text-xs">{soldQty}</div></div>
+                                                       <div className="text-center border-l border-gray-200 pl-1.5"><div className="text-indigo-400 uppercase font-bold">Queda</div><div className="font-black text-indigo-700 text-sm">{expectedQty}</div></div>
+                                                     </div>
+                                                   </div>
+                                                )
+                                             })}
+                                           </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </React.Fragment>
                                 ))}
                                 {filteredReports.length === 0 && (
                                   <tr><td colSpan="5" className="text-center py-8 text-gray-400 font-medium italic">No se cerraron cajas en este período.</td></tr>
@@ -1656,15 +1893,8 @@
                       </div>
                       <p className="text-gray-800 font-bold mb-6">{dialog.message}</p>
                       <div className="flex gap-3">
-                        {dialog.type === 'confirm' && (
-                          <button onClick={() => setDialog(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors">Cancelar</button>
-                        )}
-                        <button 
-                          onClick={() => { if (dialog.type === 'confirm' && dialog.onConfirm) dialog.onConfirm(); setDialog(null); }} 
-                          className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors"
-                        >
-                          {dialog.type === 'confirm' ? 'Confirmar' : 'Aceptar'}
-                        </button>
+                        {dialog.type === 'confirm' && <button onClick={() => setDialog(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors">Cancelar</button>}
+                        <button onClick={() => { if (dialog.type === 'confirm' && dialog.onConfirm) dialog.onConfirm(); setDialog(null); }} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors">{dialog.type === 'confirm' ? 'Confirmar' : 'Aceptar'}</button>
                       </div>
                     </div>
                   </div>
@@ -1754,10 +1984,11 @@
                     {boxSession && (
                        <button
                          onClick={() => setShowCloseBoxModal(true)}
-                         className="w-full flex items-center justify-center gap-2 p-3 rounded-xl text-white bg-red-600 hover:bg-red-700 shadow-md shadow-red-600/20 transition-all font-bold"
+                         disabled={isProcessingClose}
+                         className="w-full flex items-center justify-center gap-2 p-3 rounded-xl text-white bg-red-600 hover:bg-red-700 shadow-md shadow-red-600/20 transition-all font-bold disabled:opacity-50"
                        >
                          <Lock size={18} />
-                         <span className="hidden lg:inline">Cerrar Caja</span>
+                         <span className="hidden lg:inline">{isProcessingClose ? 'Cerrando...' : 'Cerrar Caja'}</span>
                        </button>
                     )}
 
@@ -2223,8 +2454,8 @@
                           </div>
                         </div>
                         <div className="p-6 flex gap-3 pt-0">
-                          <button type="button" onClick={() => { setShowCloseBoxModal(false); setCloseBoxPassword(''); }} className="flex-1 py-3.5 rounded-xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200">Cancelar</button>
-                          <button type="submit" className="flex-1 py-3.5 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700"><Lock size={18} className="inline mr-2" /> Confirmar Cierre</button>
+                          <button type="button" disabled={isProcessingClose} onClick={() => { setShowCloseBoxModal(false); setCloseBoxPassword(''); }} className="flex-1 py-3.5 rounded-xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 disabled:opacity-50">Cancelar</button>
+                          <button type="submit" disabled={isProcessingClose} className="flex-1 py-3.5 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"><Lock size={18} className="inline mr-2" /> {isProcessingClose ? 'Procesando...' : 'Confirmar Cierre'}</button>
                         </div>
                       </form>
                     </div>
