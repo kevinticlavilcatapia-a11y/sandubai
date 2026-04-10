@@ -71,13 +71,13 @@
           Users, LogOut, UserCircle, Key, CheckSquare, Square,
           Calendar, PieChart, Download, Printer,
           Cloud, CloudOff, Activity, ShoppingBag, TrendingDown, Receipt, Gift, ListChecks,
-          ClipboardCheck
+          ClipboardCheck, WifiOff
         } from 'https://esm.sh/lucide-react@0.292.0';
 
         // --- Importaciones de Firebase ---
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
         import { getStorage, ref, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js';
 
         // --- Configuración Global de Firebase ---
@@ -94,6 +94,16 @@
           app = initializeApp(firebaseConfig);
           auth = getAuth(app);
           db = getFirestore(app);
+          
+          // HABILITAR PERSISTENCIA OFFLINE (Ventas sin internet)
+          enableIndexedDbPersistence(db).catch((err) => {
+            if (err.code == 'failed-precondition') {
+                console.warn('Múltiples pestañas abiertas, la persistencia offline solo funciona en una.');
+            } else if (err.code == 'unimplemented') {
+                console.warn('El navegador actual no soporta persistencia offline.');
+            }
+          });
+
           storage = getStorage(app);
           appId = 'sandubai-pos'; // Identificador para las colecciones en tu base de datos
         } catch (e) {
@@ -149,6 +159,7 @@
           // --- Estados de Conexión (Firebase) ---
           const [sysAuthUser, setSysAuthUser] = useState(null);
           const [isSyncing, setIsSyncing] = useState(true);
+          const [isOffline, setIsOffline] = useState(!navigator.onLine);
 
           // --- Estado Global para Alertas Customizadas ---
           const [dialog, setDialog] = useState(null); 
@@ -259,6 +270,12 @@
 
           // --- 1. Inicialización de Firebase Auth ---
           useEffect(() => {
+            // Detección de caída de internet en tiempo real
+            const handleOnline = () => setIsOffline(false);
+            const handleOffline = () => setIsOffline(true);
+            window.addEventListener('online', handleOnline);
+            window.addEventListener('offline', handleOffline);
+
             const initAuth = async () => {
               try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -281,7 +298,11 @@
               const unsubscribe = onAuthStateChanged(auth, (u) => {
                 setSysAuthUser(u);
               });
-              return () => unsubscribe();
+              return () => {
+                unsubscribe();
+                window.removeEventListener('online', handleOnline);
+                window.removeEventListener('offline', handleOffline);
+              };
             }
           }, []);
 
@@ -364,7 +385,7 @@
             }
           }, [activeSessions, currentUser]);
 
-          // --- Exportar Historial a PDF ---
+          // --- Exportar Historial Completo a PDF ---
           const exportHistoryToPDF = () => {
             const element = document.getElementById('history-report-content');
             if (!element) return;
@@ -388,6 +409,39 @@
             });
           };
 
+          // --- Exportar Cierre de Caja Individual a PDF ---
+          const exportSingleReportToPDF = (report) => {
+            setLastSale(null);
+            setLastCloseReport(report);
+            
+            setDialog({ type: 'alert', message: 'Generando PDF del reporte de cierre...' });
+            
+            setTimeout(() => {
+              const element = document.getElementById('receipt-print-content');
+              if (!element) return;
+              
+              // Removemos temporalmente las clases de visualización condicional para que html2pdf lo capture bien sin importar la pantalla
+              const originalClass = element.className;
+              element.className = "w-[80mm] bg-white text-black font-mono text-sm p-4 absolute top-0 left-[-9999px]";
+
+              const opt = {
+                margin:       [2, 2, 2, 2],
+                filename:     `Cierre_Caja_${report.openedBy}_${formatDate(new Date(report.endTime)).replace(/[: \/]/g, '')}.pdf`,
+                image:        { type: 'jpeg', quality: 0.98 },
+                html2canvas:  { scale: 2, useCORS: true },
+                jsPDF:        { unit: 'mm', format: [80, 250], orientation: 'portrait' }
+              };
+              
+              window.html2pdf().set(opt).from(element).save().then(() => {
+                element.className = originalClass; // restauramos clases originales
+                setDialog(null);
+              }).catch(err => {
+                console.error("Error al generar PDF:", err);
+                element.className = originalClass;
+                setDialog({ type: 'alert', message: 'Hubo un problema al generar el PDF.' });
+              });
+            }, 600); // Tiempo para que React renderice la estructura
+          };
 
           // --- Lógica de Promociones y Stock Virtual ---
           const getVirtualStock = (product) => {
@@ -635,7 +689,8 @@
             for (const [pId, deductQty] of Object.entries(stockDeductions)) {
               const dbProduct = products.find(p => p.id === parseInt(pId));
               const newStock = dbProduct.stock - deductQty;
-              await setDoc(getDocRef('pos_products', dbProduct.id.toString()), { ...dbProduct, stock: newStock });
+              // SIN AWAIT: Operación instantánea, Firebase lo sube en segundo plano
+              setDoc(getDocRef('pos_products', dbProduct.id.toString()), { ...dbProduct, stock: newStock });
             }
 
             let amtEfectivo = 0, amtTarjeta = 0, amtYape = 0, amtCredito = 0;
@@ -661,7 +716,8 @@
               splitAmounts: paymentMethodId === 'dividido' ? { efectivo: amtEfectivo, tarjeta: amtTarjeta, yape: amtYape, credito: amtCredito } : null,
               soldBy: currentUser.username
             };
-            await setDoc(getDocRef('pos_sales', saleId), newSale);
+            // SIN AWAIT: Guarda venta localmente de inmediato
+            setDoc(getDocRef('pos_sales', saleId), newSale);
 
             const updatedSession = {
               ...boxSession,
@@ -672,7 +728,8 @@
               totalSalesCount: boxSession.totalSalesCount + 1
             };
             
-            await setDoc(getDocRef('pos_sessions', boxSession.id), {
+            // SIN AWAIT: Actualiza turno localmente de inmediato
+            setDoc(getDocRef('pos_sessions', boxSession.id), {
               ...updatedSession,
               startTime: typeof updatedSession.startTime === 'string' ? updatedSession.startTime : updatedSession.startTime.toISOString()
             });
@@ -699,13 +756,11 @@
             setPurchaseForm({ ...purchaseForm, items: [...purchaseForm.items, newItem] });
             setPurchaseItemTemp({ productId: '', qty: 1, cost: '' });
           };
-
           const handleRemovePurchaseItem = (index) => {
             const newItems = [...purchaseForm.items];
             newItems.splice(index, 1);
             setPurchaseForm({ ...purchaseForm, items: newItems });
           };
-
           const handleSavePurchase = async (e) => {
             e.preventDefault();
             if (purchaseForm.items.length === 0) {
@@ -838,7 +893,6 @@
               setIsSavingProduct(false);
             }
           };
-          
           const handleDeleteProduct = async (id) => {
             setDialog({ type: 'confirm', message: '¿Eliminar este producto permanentemente de todas las pantallas?', onConfirm: async () => {
               await deleteDoc(getDocRef('pos_products', id.toString())); setCart(cart.filter(item => item.id !== id));
@@ -970,7 +1024,11 @@
                       <Search className="absolute left-3 top-3 text-gray-400" size={20} />
                       <input type="text" placeholder="Buscar producto..." className="w-full bg-white text-gray-800 rounded-xl pl-10 pr-4 py-2 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all font-medium" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                     </div>
-                    {isSyncing ? (
+                    {isOffline ? (
+                      <div className="bg-amber-50 text-amber-600 border border-amber-200 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm text-sm" title="Las ventas se guardan localmente y se subirán al volver el internet">
+                        <WifiOff size={18}/> Sin Internet
+                      </div>
+                    ) : isSyncing ? (
                       <div className="bg-blue-50 text-blue-600 border border-blue-200 px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm animate-pulse text-sm">
                         <Cloud size={18} /> Conectando...
                       </div>
@@ -1091,61 +1149,36 @@
           const renderInventory = () => (
              <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
                 <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900">
-                    <Package className="text-indigo-600" /> Inventario y Productos
-                  </h2>
+                  <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><Package className="text-indigo-600" /> Inventario y Productos</h2>
                   <div className="flex gap-3">
                     {currentUser?.role === 'admin' && (
                       <>
-                      <button onClick={handleOpenAudit} className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-amber-500/20">
-                        <ClipboardCheck size={18} /> Auditoría de Stock
-                      </button>
-                      <button onClick={() => setShowCategoryModal(true)} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm">
-                        <Tags size={18} /> Categorías
-                      </button>
-                      <button onClick={() => handleOpenProductModal()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20">
-                        <Plus size={18} /> Nuevo Producto / Promo
-                      </button>
+                      <button onClick={handleOpenAudit} className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-amber-500/20"><ClipboardCheck size={18} /> Auditoría de Stock</button>
+                      <button onClick={() => setShowCategoryModal(true)} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"><Tags size={18} /> Categorías</button>
+                      <button onClick={() => handleOpenProductModal()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-indigo-600/20"><Plus size={18} /> Nuevo Producto / Promo</button>
                       </>
                     )}
-                    <button onClick={() => setShowStockModal(true)} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm" title="Solo para cuadrar diferencias. Usa el módulo Compras para ingresos reales.">
-                      <Edit2 size={18} /> Ajuste de Stock
-                    </button>
+                    <button onClick={() => setShowStockModal(true)} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm" title="Solo para cuadrar diferencias. Usa el módulo Compras para ingresos reales."><Edit2 size={18} /> Ajuste de Stock</button>
                   </div>
                 </div>
                 <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
                   <div className="overflow-x-auto flex-1 custom-scrollbar">
                     <table className="w-full text-left border-collapse">
                       <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0 z-10">
-                        <tr>
-                          <th className="px-6 py-4">Producto</th>
-                          <th className="px-6 py-4">Categoría</th>
-                          <th className="px-6 py-4">Precio</th>
-                          <th className="px-6 py-4 text-center">Stock Actual</th>
-                          <th className="px-6 py-4 text-center">Estado</th>
-                          {currentUser?.role === 'admin' && <th className="px-6 py-4 text-right">Acciones</th>}
-                        </tr>
+                        <tr><th className="px-6 py-4">Producto</th><th className="px-6 py-4">Categoría</th><th className="px-6 py-4">Precio</th><th className="px-6 py-4 text-center">Stock Actual</th><th className="px-6 py-4 text-center">Estado</th>{currentUser?.role === 'admin' && <th className="px-6 py-4 text-right">Acciones</th>}</tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {products.map(p => {
                           const visualStock = getVirtualStock(p);
                           return (
                           <tr key={p.id} className="hover:bg-gray-50/80 transition-colors">
-                            <td className="px-6 py-4">
-                              <div className="font-bold text-gray-800">{p.name}</div>
-                              {p.isPromotion && <div className="text-[10px] text-gray-500 font-bold uppercase mt-0.5">Combo (Descuenta {p.baseQuantity}x Base ID:{p.baseProductId})</div>}
-                            </td>
+                            <td className="px-6 py-4"><div className="font-bold text-gray-800">{p.name}</div>{p.isPromotion && <div className="text-[10px] text-gray-500 font-bold uppercase mt-0.5">Combo (Descuenta {p.baseQuantity}x Base ID:{p.baseProductId})</div>}</td>
                             <td className="px-6 py-4"><span className="bg-gray-100 text-gray-600 border border-gray-200 px-3 py-1 rounded-full text-xs font-semibold">{p.category}</span></td>
                             <td className="px-6 py-4 font-bold text-emerald-600">{formatCurrency(p.price)}</td>
                             <td className="px-6 py-4 text-center font-black text-lg text-gray-700 transition-colors">{p.isPromotion ? (<div className="flex flex-col items-center leading-tight"><span className="text-rose-600">{visualStock}</span><span className="text-[9px] text-gray-400 font-bold uppercase mt-1">Máx Posible</span></div>) : (visualStock)}</td>
                             <td className="px-6 py-4 text-center">{visualStock > 20 ? <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full text-xs font-bold">Óptimo</span> : visualStock > 0 ? <span className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full text-xs font-bold">Bajo</span> : <span className="inline-flex items-center gap-1.5 bg-red-100 text-red-700 px-2.5 py-1 rounded-full text-xs font-bold">Agotado</span>}</td>
                             {currentUser?.role === 'admin' && (
-                              <td className="px-6 py-4 text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  <button onClick={() => handleOpenProductModal(p)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit2 size={18} /></button>
-                                  <button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18} /></button>
-                                </div>
-                              </td>
+                              <td className="px-6 py-4 text-right"><div className="flex items-center justify-end gap-2"><button onClick={() => handleOpenProductModal(p)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit2 size={18} /></button><button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18} /></button></div></td>
                             )}
                           </tr>
                         )})}
@@ -1209,7 +1242,41 @@
              const startObjE = expensesStartDate ? new Date(expensesStartDate + 'T00:00:00') : new Date('2000-01-01');
              const endObjE = expensesEndDate ? new Date(expensesEndDate + 'T23:59:59') : new Date('2100-01-01');
              const filteredExpenses = expenses.filter(e => { const d = new Date(e.date); return d >= startObjE && d <= endObjE; });
-             return (<div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><TrendingDown className="text-rose-600" /> Registro de Egresos y Gastos</h2><button onClick={() => setShowExpenseModal(true)} className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-rose-600/20"><Plus size={18} /> Nuevo Egreso</button></div><div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-wrap items-center gap-4 mb-4 flex-shrink-0"><div className="flex items-center gap-2"><Calendar className="text-gray-400" size={20} /><span className="font-bold text-gray-700">Desde:</span><input type="date" value={expensesStartDate} onChange={e => setExpensesStartDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-rose-500 outline-none" /></div><div className="flex items-center gap-2"><span className="font-bold text-gray-700">Hasta:</span><input type="date" value={expensesEndDate} onChange={e => setExpensesEndDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-rose-500 outline-none" /></div><div className="ml-auto flex items-center gap-3"><span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">{filteredExpenses.length} registros</span><div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">Total Gastado:</span><span className="text-xl font-black text-rose-600">{formatCurrency(filteredExpenses.reduce((sum, e) => sum + e.amount, 0))}</span></div></div></div><div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col"><div className="overflow-x-auto flex-1 custom-scrollbar"><table className="w-full text-left border-collapse"><thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0"><tr><th className="px-6 py-4">Fecha</th><th className="px-6 py-4">Descripción / Motivo</th><th className="px-6 py-4 text-right">Monto</th><th className="px-6 py-4">Registrado por</th></tr></thead><tbody className="divide-y divide-gray-100">{filteredExpenses.map(e => (<tr key={e.id} className="hover:bg-gray-50/80 transition-colors"><td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(new Date(e.date))}</td><td className="px-6 py-4 text-gray-800">{e.description}</td><td className="px-6 py-4 text-right font-black text-rose-600">{formatCurrency(e.amount)}</td><td className="px-6 py-4 text-sm text-gray-600 uppercase">{e.registeredBy}</td></tr>))}</tbody></table></div></div></div>);
+             return (
+               <div className="p-6 h-full flex flex-col bg-gray-50 text-gray-800 overflow-hidden">
+                 <div className="flex justify-between items-center mb-6">
+                   <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-900"><TrendingDown className="text-rose-600" /> Registro de Egresos y Gastos</h2>
+                   <button onClick={() => setShowExpenseModal(true)} className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm shadow-rose-600/20"><Plus size={18} /> Nuevo Egreso</button>
+                 </div>
+                 <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-wrap items-center gap-4 mb-4 flex-shrink-0">
+                   <div className="flex items-center gap-2"><Calendar className="text-gray-400" size={20} /><span className="font-bold text-gray-700">Desde:</span><input type="date" value={expensesStartDate} onChange={e => setExpensesStartDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-rose-500 outline-none" /></div>
+                   <div className="flex items-center gap-2"><span className="font-bold text-gray-700">Hasta:</span><input type="date" value={expensesEndDate} onChange={e => setExpensesEndDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-rose-500 outline-none" /></div>
+                   <div className="ml-auto flex items-center gap-3">
+                     <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">{filteredExpenses.length} registros</span>
+                     <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-500">Total Gastado:</span><span className="text-xl font-black text-rose-600">{formatCurrency(filteredExpenses.reduce((sum, e) => sum + e.amount, 0))}</span></div>
+                   </div>
+                 </div>
+                 <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm flex-1 flex flex-col">
+                   <div className="overflow-x-auto flex-1 custom-scrollbar">
+                     <table className="w-full text-left border-collapse">
+                       <thead className="bg-gray-100 text-gray-600 text-sm uppercase font-semibold sticky top-0">
+                         <tr><th className="px-6 py-4">Fecha</th><th className="px-6 py-4">Descripción / Motivo</th><th className="px-6 py-4 text-right">Monto</th><th className="px-6 py-4">Registrado por</th></tr>
+                       </thead>
+                       <tbody className="divide-y divide-gray-100">
+                         {filteredExpenses.map(e => (
+                           <tr key={e.id} className="hover:bg-gray-50/80 transition-colors">
+                             <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(new Date(e.date))}</td>
+                             <td className="px-6 py-4 text-gray-800">{e.description}</td>
+                             <td className="px-6 py-4 text-right font-black text-rose-600">{formatCurrency(e.amount)}</td>
+                             <td className="px-6 py-4 text-sm text-gray-600 uppercase">{e.registeredBy}</td>
+                           </tr>
+                         ))}
+                       </tbody>
+                     </table>
+                   </div>
+                 </div>
+               </div>
+             );
           };
 
           // ================= MÓDULO VENTAS Y REPORTES (ACTUALIZADO) =================
@@ -1408,7 +1475,15 @@
                                       <tr key={sale.id} className="hover:bg-gray-50/80 transition-colors">
                                         <td className="px-6 py-4 font-mono text-indigo-600 font-bold uppercase text-xs">#{sale.id}</td>
                                         <td className="px-6 py-4 text-sm text-gray-600 font-medium">{formatTime(new Date(sale.date))}</td>
-                                        <td className="px-6 py-4"><ul className="text-xs space-y-1">{sale.items.map(item => (<li key={item.id} className="text-gray-700 font-medium"><span className="text-indigo-600 font-bold">{item.quantity}x</span> {item.name}</li>))}</ul></td>
+                                        <td className="px-6 py-4">
+                                          <ul className="text-xs space-y-1">
+                                            {sale.items.map((item, idx) => (
+                                              <li key={idx} className="text-gray-700 font-medium">
+                                                <span className="text-indigo-600 font-bold">{item.quantity}x</span> {item.name}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </td>
                                         <td className="px-6 py-4">
                                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold text-white uppercase ${methodColor}`}>
                                             <MethodIcon size={12} /> {methodName}
@@ -1567,161 +1642,175 @@
                           {/* SECCIÓN 3: Cierres de Caja */}
                           <div className="avoid-page-break">
                             <h4 className="font-bold text-gray-800 uppercase border-b-2 border-gray-800 pb-2 mb-4 flex items-center gap-2"><Lock size={18}/> Registro de Turnos y Cajas</h4>
-                            <table className="w-full text-left border-collapse text-sm">
-                              <thead className="bg-gray-100 text-gray-600 uppercase font-semibold">
-                                <tr>
-                                  <th className="px-6 py-4 border-b border-gray-200">Turno (Apertura/Cierre)</th>
-                                  <th className="px-6 py-4 border-b border-gray-200 text-center">Operaciones</th>
-                                  <th className="px-6 py-4 border-b border-gray-200 text-right">Monto Apertura</th>
-                                  <th className="px-6 py-4 border-b border-gray-200 text-right bg-amber-50">Ventas Efectivo</th>
-                                  <th className="px-6 py-4 border-b border-gray-200 text-right">Descuadre</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-100">
-                                {filteredReports.map(report => (
-                                  <React.Fragment key={report.id}>
-                                    <tr className="hover:bg-gray-50/80 transition-colors">
-                                      <td className="px-6 py-4 text-sm text-gray-700">
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="font-bold text-[11px] text-emerald-600 whitespace-nowrap">Apertura: {formatDate(new Date(report.startTime))}</span>
-                                  <span className="font-bold text-[11px] text-red-500 whitespace-nowrap">Cierre: {formatDate(new Date(report.endTime))}</span>
-                                  <span className="text-[10px] text-gray-400 uppercase font-bold mt-1">Cajero: <span className="text-gray-600">{report.openedBy}</span></span>
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 text-center">
-                                <div className="flex flex-col items-center gap-1.5">
-                                  <span className="font-bold text-gray-600">{report.totalSalesCount}</span>
-                                  <button 
-                                    onClick={() => setExpandedReportId(expandedReportId === report.id ? null : report.id)}
-                                    className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md hover:bg-indigo-100 transition-colors font-bold whitespace-nowrap print:hidden"
-                                  >
-                                    {expandedReportId === report.id ? 'Ocultar Ventas' : 'Ver Ventas'}
-                                  </button>
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 text-right">
-                                <span className="font-black text-gray-800">{formatCurrency(report.initialCash)}</span>
-                              </td>
-                                      <td className="px-6 py-4 text-center">
-                                        <div className="flex flex-col items-center gap-1.5">
-                                          <span className="font-bold text-gray-600">{report.totalSalesCount}</span>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left border-collapse text-sm">
+                                <thead className="bg-gray-100 text-gray-600 uppercase font-semibold text-[11px]">
+                                  <tr>
+                                    <th className="px-3 py-3 border-b border-gray-200">Turno</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-center">Oper.</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-right">Base Aper.</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-right text-emerald-600">Efectivo</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-right text-blue-600">Tarjeta</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-right text-purple-600">Yape</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-right text-orange-600">Crédito</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-right bg-indigo-50">Total Ventas</th>
+                                    <th className="px-3 py-3 border-b border-gray-200 text-center">Opciones</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                  {filteredReports.map(report => (
+                                    <React.Fragment key={report.id}>
+                                      <tr className="hover:bg-gray-50/80 transition-colors">
+                                        <td className="px-3 py-3 text-sm text-gray-700">
+                                          <div className="flex flex-col gap-0.5">
+                                            <span className="font-bold text-[10px] text-emerald-600 whitespace-nowrap">Apertura: {formatDate(new Date(report.startTime))}</span>
+                                            <span className="font-bold text-[10px] text-red-500 whitespace-nowrap">Cierre: {formatDate(new Date(report.endTime))}</span>
+                                            <span className="text-[9px] text-gray-400 uppercase font-bold mt-1">Cajero: <span className="text-gray-600">{report.openedBy}</span></span>
+                                          </div>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <div className="flex flex-col items-center gap-1.5">
+                                            <span className="font-bold text-gray-600">{report.totalSalesCount}</span>
+                                            <button 
+                                              onClick={() => setExpandedReportId(expandedReportId === report.id ? null : report.id)}
+                                              className="text-[9px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md hover:bg-indigo-100 transition-colors font-bold whitespace-nowrap print:hidden"
+                                            >
+                                              {expandedReportId === report.id ? 'Ocultar Ventas' : 'Ver Ventas'}
+                                            </button>
+                                          </div>
+                                        </td>
+                                        <td className="px-3 py-3 text-right">
+                                          <span className="font-black text-gray-800">{formatCurrency(report.initialCash)}</span>
+                                        </td>
+                                        <td className="px-3 py-3 text-right bg-emerald-50/30">
+                                          <span className="font-black text-emerald-600">{formatCurrency(report.salesEfectivo)}</span>
+                                        </td>
+                                        <td className="px-3 py-3 text-right bg-blue-50/30">
+                                          <span className="font-black text-blue-600">{formatCurrency(report.salesTarjeta)}</span>
+                                        </td>
+                                        <td className="px-3 py-3 text-right bg-purple-50/30">
+                                          <span className="font-black text-purple-600">{formatCurrency(report.salesYape)}</span>
+                                        </td>
+                                        <td className="px-3 py-3 text-right bg-orange-50/30">
+                                          <span className="font-black text-orange-600">{formatCurrency(report.salesCredito || 0)}</span>
+                                        </td>
+                                        <td className="px-3 py-3 text-right bg-indigo-50/30">
+                                          <span className="font-black text-indigo-700">{formatCurrency(report.totalVentas)}</span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
                                           <button 
-                                            onClick={() => setExpandedReportId(expandedReportId === report.id ? null : report.id)}
-                                            className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md hover:bg-indigo-100 transition-colors font-bold whitespace-nowrap"
+                                            onClick={() => exportSingleReportToPDF(report)}
+                                            className="bg-red-600 hover:bg-red-700 text-white px-2.5 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-colors flex items-center justify-center gap-1 mx-auto print:hidden shadow-sm"
+                                            title="Exportar Ticket a PDF"
                                           >
-                                            {expandedReportId === report.id ? 'Ocultar Ventas' : 'Ver Ventas'}
+                                            <Download size={12} /> Exportar PDF
                                           </button>
-                                        </div>
-                                      </td>
-                                      <td className="px-6 py-4 text-right">
-                                <span className={`font-black text-xs ${report.descuadre === 0 ? 'text-emerald-600' : report.descuadre > 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                                  {report.descuadre === 0 ? 'CUADRADO' : report.descuadre > 0 ? `+${formatCurrency(report.descuadre)}` : formatCurrency(report.descuadre)}
-                                </span>
-                              </td>
-                            </tr>
-                            
-                            {/* Mostrar Detalle de Ventas si está expandido */}
-                            {expandedReportId === report.id && (() => {
-                              // Respaldo de compatibilidad para turnos antiguos: si no coinciden por ID, coinciden por rango de horas exacto y cajero
-                              const reportSales = sales.filter(s => 
-                                s.sessionId === report.id || 
-                                (s.soldBy === report.openedBy && s.date >= report.startTime && s.date <= report.endTime)
-                              );
-
-                              return (
-                                <tr className="bg-gray-50 border-b border-gray-200 print:bg-white print:border-b print:border-gray-200">
-                                  <td colSpan="5" className="px-6 py-4">
-                                     <div className="text-xs font-bold text-gray-800 mb-2 flex items-center gap-1 uppercase">
-                                       <Receipt size={14}/> Detalle de Operaciones de este turno
-                                     </div>
-                                     {reportSales.length === 0 ? (
-                                        <p className="text-gray-500 italic text-xs py-2">No se registraron operaciones.</p>
-                                     ) : (
-                                        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                                          <table className="w-full text-xs text-left border-collapse">
-                                            <thead className="bg-gray-50 text-gray-600 uppercase font-semibold">
-                                              <tr>
-                                                <th className="px-3 py-2 border-b border-gray-200">Hora / Venta</th>
-                                                <th className="px-3 py-2 border-b border-gray-200">Detalle de Productos</th>
-                                                <th className="px-3 py-2 border-b border-gray-200 text-center">Pago</th>
-                                                <th className="px-3 py-2 border-b border-gray-200 text-right">Total</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100">
-                                              {reportSales.map(sale => {
-                                                const method = PAYMENT_METHODS.find(m => m.id === sale.paymentMethod);
-                                                const MethodIcon = sale.paymentMethod === 'dividido' ? PieChart : (method?.icon || Banknote);
-                                                const methodName = sale.paymentMethod === 'dividido' ? 'Dividido' : (method?.name || sale.paymentMethod);
-                                                const methodColor = sale.paymentMethod === 'dividido' ? 'bg-gray-800' : (method?.color || 'bg-gray-600');
-
-                                                return (
-                                                  <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
-                                                    <td className="px-3 py-2">
-                                                      <div className="font-bold text-gray-800">{formatTime(sale.date)}</div>
-                                                      <div className="font-mono text-indigo-600 font-bold uppercase text-[9px]">#{sale.id}</div>
-                                                    </td>
-                                                    <td className="px-3 py-2">
-                                                      <ul className="space-y-0.5">
-                                                        {sale.items.map((item, idx) => (
-                                                          <li key={idx} className="text-gray-700">
-                                                            <span className="text-indigo-600 font-bold">{item.quantity}x</span> {item.name}
-                                                          </li>
-                                                        ))}
-                                                      </ul>
-                                                    </td>
-                                                    <td className="px-3 py-2 text-center">
-                                                       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold text-white uppercase ${methodColor}`}>
-                                                         <MethodIcon size={10} /> {methodName}
-                                                       </span>
-                                                    </td>
-                                                    <td className="px-3 py-2 text-right font-black text-emerald-600">{formatCurrency(sale.total)}</td>
-                                                  </tr>
-                                                )
-                                              })}
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                     )}
-                                  </td>
-                                </tr>
-                              );
-                            })()}
-                            
-                            {/* Mostrar el Control de Barra en el UI si la caja lo tuvo */}
-                            {report.assignedStock && Object.keys(report.assignedStock).length > 0 && (
-                              <tr className="bg-indigo-50/40 avoid-page-break print:bg-white print:border-b print:border-gray-200">
-                                        <td colSpan="5" className="px-6 py-4">
-                                           <div className="text-xs font-bold text-indigo-800 mb-2 flex items-center gap-1 uppercase">
-                                             <ClipboardList size={14}/> Detalle de Control de Barra
-                                           </div>
-                                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                             {Object.entries(report.assignedStock).map(([pId, assignedQty]) => {
-                                                const prod = products.find(p => p.id === parseInt(pId));
-                                                if (!prod) return null;
-                                                const soldQty = report.soldItems?.[pId] || 0;
-                                                const expectedQty = assignedQty - soldQty;
-                                                return (
-                                                   <div key={pId} className="bg-white border border-indigo-100 rounded-lg p-2.5 flex flex-col justify-between items-start shadow-sm print:border-gray-300">
-                                                     <span className="font-bold text-gray-700 text-[11px] leading-tight w-full truncate border-b border-gray-100 pb-1.5 mb-1.5">{prod.name}</span>
-                                                     <div className="flex w-full items-center justify-between gap-1 text-[10px]">
-                                                       <div className="text-center"><div className="text-gray-400 uppercase font-bold">Asig.</div><div className="font-bold text-gray-800 text-xs">{assignedQty}</div></div>
-                                                       <div className="text-center"><div className="text-gray-400 uppercase font-bold">Vend.</div><div className="font-bold text-emerald-600 text-xs">{soldQty}</div></div>
-                                                       <div className="text-center border-l border-gray-200 pl-1.5"><div className="text-indigo-400 uppercase font-bold">Queda</div><div className="font-black text-indigo-700 text-sm">{expectedQty}</div></div>
-                                                     </div>
-                                                   </div>
-                                                )
-                                             })}
-                                           </div>
                                         </td>
                                       </tr>
-                                    )}
-                                  </React.Fragment>
-                                ))}
-                                {filteredReports.length === 0 && (
-                                  <tr><td colSpan="5" className="text-center py-8 text-gray-400 font-medium italic">No se cerraron cajas en este período.</td></tr>
-                                )}
-                              </tbody>
-                            </table>
+                                      
+                                      {/* Mostrar Detalle de Ventas si está expandido */}
+                                      {expandedReportId === report.id && (() => {
+                                        // Respaldo de compatibilidad para turnos antiguos: si no coinciden por ID, coinciden por rango de horas exacto y cajero
+                                        const reportSales = sales.filter(s => 
+                                          s.sessionId === report.id || 
+                                          (s.soldBy === report.openedBy && s.date >= report.startTime && s.date <= report.endTime)
+                                        );
+
+                                        return (
+                                          <tr className="bg-gray-50 border-b border-gray-200 print:bg-white print:border-b print:border-gray-200">
+                                            <td colSpan="9" className="px-6 py-4">
+                                               <div className="text-xs font-bold text-gray-800 mb-2 flex items-center gap-1 uppercase">
+                                                 <Receipt size={14}/> Detalle de Operaciones de este turno
+                                               </div>
+                                               {reportSales.length === 0 ? (
+                                                  <p className="text-gray-500 italic text-xs py-2">No se registraron operaciones.</p>
+                                               ) : (
+                                                  <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                                                    <table className="w-full text-xs text-left border-collapse">
+                                                      <thead className="bg-gray-50 text-gray-600 uppercase font-semibold">
+                                                        <tr>
+                                                          <th className="px-3 py-2 border-b border-gray-200">Hora / Venta</th>
+                                                          <th className="px-3 py-2 border-b border-gray-200">Detalle de Productos</th>
+                                                          <th className="px-3 py-2 border-b border-gray-200 text-center">Pago</th>
+                                                          <th className="px-3 py-2 border-b border-gray-200 text-right">Total</th>
+                                                        </tr>
+                                                      </thead>
+                                                      <tbody className="divide-y divide-gray-100">
+                                                        {reportSales.map(sale => {
+                                                          const method = PAYMENT_METHODS.find(m => m.id === sale.paymentMethod);
+                                                          const MethodIcon = sale.paymentMethod === 'dividido' ? PieChart : (method?.icon || Banknote);
+                                                          const methodName = sale.paymentMethod === 'dividido' ? 'Dividido' : (method?.name || sale.paymentMethod);
+                                                          const methodColor = sale.paymentMethod === 'dividido' ? 'bg-gray-800' : (method?.color || 'bg-gray-600');
+
+                                                          return (
+                                                            <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
+                                                              <td className="px-3 py-2">
+                                                                <div className="font-bold text-gray-800">{formatTime(new Date(sale.date))}</div>
+                                                                <div className="font-mono text-indigo-600 font-bold uppercase text-[9px]">#{sale.id}</div>
+                                                              </td>
+                                                              <td className="px-3 py-2">
+                                                                <ul className="space-y-0.5">
+                                                                  {sale.items.map((item, idx) => (
+                                                                    <li key={idx} className="text-gray-700">
+                                                                      <span className="text-indigo-600 font-bold">{item.quantity}x</span> {item.name}
+                                                                    </li>
+                                                                  ))}
+                                                                </ul>
+                                                              </td>
+                                                              <td className="px-3 py-2 text-center">
+                                                                 <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold text-white uppercase ${methodColor}`}>
+                                                                   <MethodIcon size={10} /> {methodName}
+                                                                 </span>
+                                                              </td>
+                                                              <td className="px-3 py-2 text-right font-black text-emerald-600">{formatCurrency(sale.total)}</td>
+                                                            </tr>
+                                                          )
+                                                        })}
+                                                      </tbody>
+                                                    </table>
+                                                  </div>
+                                               )}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })()}
+                                      
+                                      {/* Mostrar el Control de Barra en el UI si la caja lo tuvo */}
+                                      {report.assignedStock && Object.keys(report.assignedStock).length > 0 && (
+                                        <tr className="bg-indigo-50/40 avoid-page-break print:bg-white print:border-b print:border-gray-200">
+                                          <td colSpan="9" className="px-6 py-4">
+                                             <div className="text-xs font-bold text-indigo-800 mb-2 flex items-center gap-1 uppercase">
+                                               <ClipboardList size={14}/> Detalle de Control de Barra
+                                             </div>
+                                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                               {Object.entries(report.assignedStock).map(([pId, assignedQty]) => {
+                                                  const prod = products.find(p => p.id === parseInt(pId));
+                                                  if (!prod) return null;
+                                                  const soldQty = report.soldItems?.[pId] || 0;
+                                                  const expectedQty = assignedQty - soldQty;
+                                                  return (
+                                                     <div key={pId} className="bg-white border border-indigo-100 rounded-lg p-2.5 flex flex-col justify-between items-start shadow-sm print:border-gray-300">
+                                                       <span className="font-bold text-gray-700 text-[11px] leading-tight w-full truncate border-b border-gray-100 pb-1.5 mb-1.5">{prod.name}</span>
+                                                       <div className="flex w-full items-center justify-between gap-1 text-[10px]">
+                                                         <div className="text-center"><div className="text-gray-400 uppercase font-bold">Asig.</div><div className="font-bold text-gray-800 text-xs">{assignedQty}</div></div>
+                                                         <div className="text-center"><div className="text-gray-400 uppercase font-bold">Vend.</div><div className="font-bold text-emerald-600 text-xs">{soldQty}</div></div>
+                                                         <div className="text-center border-l border-gray-200 pl-1.5"><div className="text-indigo-400 uppercase font-bold">Queda</div><div className="font-black text-indigo-700 text-sm">{expectedQty}</div></div>
+                                                       </div>
+                                                     </div>
+                                                  )
+                                               })}
+                                             </div>
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </React.Fragment>
+                                  ))}
+                                  {filteredReports.length === 0 && (
+                                    <tr><td colSpan="9" className="text-center py-8 text-gray-400 font-medium italic">No se cerraron cajas en este período.</td></tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
                           </div>
 
                         </div>
@@ -1822,8 +1911,12 @@
                 </div>
                 <div className="md:w-1/2 p-12 flex flex-col justify-center bg-gray-50 relative">
                   <div className="absolute top-6 right-6 flex items-center gap-2">
-                    {!sysAuthUser ? (
-                      <span className="flex items-center gap-1.5 text-xs font-bold text-amber-500 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200">
+                    {isOffline ? (
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200">
+                        <WifiOff size={14}/> Sin Conexión
+                      </span>
+                    ) : !sysAuthUser ? (
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-blue-500 bg-blue-50 px-3 py-1.5 rounded-full border border-blue-200">
                         <CloudOff size={14}/> Conectando BD...
                       </span>
                     ) : (
@@ -2542,7 +2635,7 @@
               </div>
 
               {/* TICKET DE IMPRESIÓN */}
-              <div className="hidden print:block w-[80mm] bg-white text-black font-mono text-sm p-4 mx-auto">
+              <div id="receipt-print-content" className="hidden print:block w-[80mm] bg-white text-black font-mono text-sm p-4 mx-auto">
                 {lastSale && (
                   <>
                     <div className="text-center mb-2">
