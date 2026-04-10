@@ -575,6 +575,63 @@
             }
           };
 
+          // --- Función para Forzar Cierre de Caja (Solo Admin) ---
+          const forceCloseSession = async (sessionToClose) => {
+            setDialog({
+              type: 'confirm',
+              message: `¿Estás seguro de forzar el cierre de la caja de ${sessionToClose.openedBy}? (El sistema realizará un cuadre automático con lo vendido).`,
+              onConfirm: async () => {
+                if (isProcessingClose) return;
+                setIsProcessingClose(true);
+                try {
+                  const sessionSales = sales.filter(s => s.sessionId === sessionToClose.id);
+                  const soldItems = {};
+                  sessionSales.forEach(sale => {
+                    sale.items.forEach(item => {
+                      if (item.isPromotion) {
+                        const bId = item.baseProductId;
+                        soldItems[bId] = (soldItems[bId] || 0) + (item.quantity * item.baseQuantity);
+                      } else {
+                        soldItems[item.id] = (soldItems[item.id] || 0) + item.quantity;
+                      }
+                    });
+                  });
+
+                  const efectivoEsperado = sessionToClose.initialCash + sessionToClose.salesEfectivo;
+                  const declaredCash = efectivoEsperado; 
+
+                  const report = {
+                    ...sessionToClose,
+                    endTime: new Date(),
+                    totalVentas: sessionToClose.salesEfectivo + sessionToClose.salesTarjeta + sessionToClose.salesYape + (sessionToClose.salesCredito || 0),
+                    efectivoEsperado: efectivoEsperado,
+                    efectivoDeclarado: declaredCash,
+                    descuadre: declaredCash - efectivoEsperado,
+                    closedBy: currentUser.username,
+                    closedByName: currentUser.name + ' (Forzado por Admin)',
+                    soldItems: soldItems 
+                  };
+                  
+                  const reportId = sessionToClose.id;
+                  await setDoc(getDocRef('pos_reports', reportId), {
+                    ...report,
+                    id: reportId,
+                    startTime: typeof report.startTime === 'string' ? report.startTime : report.startTime.toISOString(),
+                    endTime: report.endTime.toISOString()
+                  });
+
+                  await deleteDoc(getDocRef('pos_sessions', sessionToClose.id));
+                  setDialog({ type: 'alert', message: `Caja de ${sessionToClose.openedBy} cerrada exitosamente.` });
+                } catch (error) {
+                  console.error("Error forzando cierre:", error);
+                  setDialog({ type: 'alert', message: 'Hubo un error al forzar el cierre.' });
+                } finally {
+                  setIsProcessingClose(false);
+                }
+              }
+            });
+          };
+
           // --- Funciones para Asignar Stock de Control (Solo Admin) ---
           const handleAddAssignedStock = async (e) => {
             e.preventDefault();
@@ -1423,12 +1480,21 @@
                                     </div>
                                   </div>
                                   <div className="flex justify-between items-center text-sm border-t border-gray-200 pt-3">
-                                    <button 
-                                      onClick={() => { setSelectedSessionForStock(session); setShowAssignStockModal(true); }}
-                                      className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-1 border border-indigo-100 shadow-sm active:scale-95"
-                                    >
-                                      <ClipboardList size={14} /> Control de Barra
-                                    </button>
+                                    <div className="flex gap-2">
+                                      <button 
+                                        onClick={() => { setSelectedSessionForStock(session); setShowAssignStockModal(true); }}
+                                        className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-1 border border-indigo-100 shadow-sm active:scale-95"
+                                      >
+                                        <ClipboardList size={14} /> Control de Barra
+                                      </button>
+                                      <button 
+                                        onClick={() => forceCloseSession(session)}
+                                        disabled={isProcessingClose}
+                                        className="text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1 border border-red-100 shadow-sm active:scale-95 disabled:opacity-50"
+                                      >
+                                        <Lock size={14} /> Forzar Cierre
+                                      </button>
+                                    </div>
                                     <div className="text-right">
                                       <span className="font-bold text-gray-500 block text-[10px] uppercase">Total Venta</span>
                                       <span className="font-black text-gray-800 text-lg leading-none">{formatCurrency(totalVendido)}</span>
