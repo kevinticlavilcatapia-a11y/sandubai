@@ -198,8 +198,15 @@
           const [historyStartDate, setHistoryStartDate] = useState(getFirstDayOfMonthStr());
           const [historyEndDate, setHistoryEndDate] = useState(getTodayStr());
 
-          // --- Estados de Sesión Local ---
-          const [currentUser, setCurrentUser] = useState(null); 
+          // --- Estados de Sesión Local (Persistente con LocalStorage) ---
+          const [currentUser, setCurrentUser] = useState(() => {
+            try {
+              const savedUser = localStorage.getItem('sandubai_user');
+              return savedUser ? JSON.parse(savedUser) : null;
+            } catch (e) {
+              return null;
+            }
+          }); 
           const [loginForm, setLoginForm] = useState({ username: '', password: '' });
           const [cart, setCart] = useState([]);
           const [boxSession, setBoxSession] = useState(null); 
@@ -384,6 +391,22 @@
               setBoxSession(null);
             }
           }, [activeSessions, currentUser]);
+
+          // --- Mantener el usuario actualizado si el admin le cambia roles o lo elimina ---
+          useEffect(() => {
+            if (currentUser && users.length > 0) {
+              const dbUser = users.find(u => u.username === currentUser.username);
+              if (!dbUser) {
+                // Usuario eliminado de la base de datos
+                setCurrentUser(null);
+                localStorage.removeItem('sandubai_user');
+              } else if (JSON.stringify(dbUser) !== JSON.stringify(currentUser)) {
+                // Permisos u otros datos actualizados
+                setCurrentUser(dbUser);
+                localStorage.setItem('sandubai_user', JSON.stringify(dbUser));
+              }
+            }
+          }, [users]);
 
           // --- Exportar Historial Completo a PDF ---
           const exportHistoryToPDF = () => {
@@ -813,11 +836,13 @@
             setPurchaseForm({ ...purchaseForm, items: [...purchaseForm.items, newItem] });
             setPurchaseItemTemp({ productId: '', qty: 1, cost: '' });
           };
+
           const handleRemovePurchaseItem = (index) => {
             const newItems = [...purchaseForm.items];
             newItems.splice(index, 1);
             setPurchaseForm({ ...purchaseForm, items: newItems });
           };
+
           const handleSavePurchase = async (e) => {
             e.preventDefault();
             if (purchaseForm.items.length === 0) {
@@ -896,6 +921,7 @@
               }
 
               setCurrentUser(user);
+              localStorage.setItem('sandubai_user', JSON.stringify(user));
               if (user.role === 'admin') {
                 setActiveTab('sales'); setSalesTab('actual');
               } else {
@@ -910,10 +936,14 @@
 
           const handleLogout = () => {
             if (boxSession) {
-              setDialog({ type: 'confirm', message: 'Tu caja está abierta. ¿Deseas cerrar sesión? (Tu turno y ventas seguirán activos en la nube)', onConfirm: () => setCurrentUser(null) });
+              setDialog({ type: 'confirm', message: 'Tu caja está abierta. ¿Deseas cerrar sesión? (Tu turno y ventas seguirán activos en la nube)', onConfirm: () => {
+                  setCurrentUser(null);
+                  localStorage.removeItem('sandubai_user');
+              }});
               return;
             }
             setCurrentUser(null);
+            localStorage.removeItem('sandubai_user');
           };
 
           const handleOpenUserModal = (user = null) => { setUserForm(user ? user : DEFAULT_USER_FORM); setShowUserModal(true); };
